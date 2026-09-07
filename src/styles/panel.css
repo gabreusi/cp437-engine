@@ -118,3 +118,18 @@ input[type="checkbox"] {
     border-color: var(--neon-cyan-deep);
     box-shadow: 0 0 10px var(--neon-cyan-deep);
 }
+
+#hud {
+    position: fixed;
+    left: 10px;
+    bottom: 10px;
+    padding: 6px 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--neon-cyan);
+    background: rgba(5, 0, 14, .6);
+    border: 1px solid var(--neon-cyan-far);
+    border-radius: 4px;
+    pointer-events: none;
+    white-space: nowrap;
+}

@@ -1,39 +1,64 @@
-/** Ajustes que o painel de controle altera em tempo real. */
+/**
+ * Parâmetros que o painel ajusta em tempo real.
+ *
+ * São os controles da engine, não mais medidas de tela: a versão anterior tinha
+ * "posição do horizonte" e "altura do sol em fileiras", que só faziam sentido
+ * quando não existia câmera. Horizonte agora é para onde a câmera olha, e o sol
+ * tem elevação e azimute como qualquer corpo celeste.
+ */
 export interface Settings {
-    travelSpeed: number;
-    starDensity: number;
-    horizonRatio: number;
-    sunOffsetRows: number;
-    sunSizeMultiplier: number;
-    sunSlicesMultiplier: number;
-    /** Espaçamento entre as linhas horizontais do chão, em unidades de mundo. */
-    lineSpacingWorld: number;
-    /** Espaçamento entre os trilhos que fogem para o horizonte. */
-    railSpacingWorld: number;
-    enableHaze: boolean;
+    fovDegrees: number;
+    moveSpeed: number;
+    /** Radianos de giro por pixel de mouse. */
+    lookSensitivity: number;
+
+    /** Unidades de mundo entre duas linhas da grade. */
+    gridSize: number;
+    /** Até onde a grade é emitida, em unidades de mundo. */
+    viewDistance: number;
+
+    fogDensity: number;
+    fogEnabled: boolean;
+
+    /** Graus acima do horizonte. Negativo afunda o sol. */
+    sunElevation: number;
+    sunAzimuth: number;
+    /** Raio angular do disco, em graus. */
+    sunAngularSize: number;
+    sunSlices: number;
+
+    starCount: number;
+
+    bloomIntensity: number;
+    bloomRadius: number;
+    scanlineStrength: number;
+    vignetteStrength: number;
 }
 
-/**
- * Estado vivo do gerador. É a única fonte da verdade: o HTML não guarda valor
- * inicial nenhum, o painel se inicializa a partir daqui.
- */
 export const settings: Settings = {
-    travelSpeed: 1,
-    starDensity: 0.03,
-    horizonRatio: 0.5,
-    sunOffsetRows: 0,
-    sunSizeMultiplier: 1,
-    sunSlicesMultiplier: 1.1,
-    lineSpacingWorld: 0.4,
-    railSpacingWorld: 1,
-    enableHaze: true,
+    fovDegrees: 70,
+    moveSpeed: 12,
+    lookSensitivity: 0.0022,
+
+    gridSize: 4,
+    viewDistance: 220,
+
+    fogDensity: 1,
+    fogEnabled: true,
+
+    sunElevation: 4,
+    sunAzimuth: 0,
+    sunAngularSize: 13,
+    sunSlices: 1.1,
+
+    starCount: 1400,
+
+    bloomIntensity: 0.55,
+    bloomRadius: 1.6,
+    scanlineStrength: 0.2,
+    vignetteStrength: 0.55,
 };
 
 export const CANVAS_BACKGROUND = '#05000e';
 
-export const BLANK_CHAR = ' ';
-export const STAR_CHARS = ['·', '•', '+', '*'] as const;
-export const SUN_SHADES = ['y0', 'y1', 'y2', 'y3', 'y4', 'y5', 'y6', 'y7'] as const;
-
-/** Repetições enviesam o sorteio para o branco-azulado `k0`. */
-export const STAR_TINTS = ['k0', 'k0', 'k0', 'k0', 'k0', 'k0', 'k1', 'k2', 'k3'] as const;
+export const degreesToRadians = (degrees: number): number => (degrees * Math.PI) / 180;

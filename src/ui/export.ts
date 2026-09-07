@@ -1,5 +1,4 @@
 import Cropper from 'cropperjs';
-import html2canvas from 'html2canvas';
 import 'cropperjs/dist/cropper.css';
 
 import { CANVAS_BACKGROUND } from '../config';
@@ -27,11 +26,14 @@ const readDimension = (input: HTMLInputElement): number | undefined => {
     return Number.isNaN(parsed) || parsed <= 0 ? undefined : parsed;
 };
 
+export type CaptureFn = (scale: number) => HTMLCanvasElement;
+
 /**
- * Captura o palco, deixa o usuário recortar e baixa o PNG.
+ * Captura a cena, deixa o usuário recortar e baixa o PNG.
  *
- * O Cropper é criado a cada abertura e destruído ao fechar: ele guarda
- * referência à imagem antiga, e a imagem muda a cada captura.
+ * A captura não vem mais do html2canvas, que não enxerga canvas WebGL: quem
+ * entrega o quadro é o presenter, renderizando de novo fora da tela em
+ * resolução ampliada. O Cropper continua igual — ele trabalha sobre uma imagem.
  */
 class ExportDialog {
     private cropper: Cropper | null = null;
@@ -41,22 +43,15 @@ class ExportDialog {
     private readonly widthInput = requireElement<HTMLInputElement>('export-width');
     private readonly heightInput = requireElement<HTMLInputElement>('export-height');
 
-    constructor(private readonly stage: HTMLElement) {}
+    constructor(private readonly capture: CaptureFn) {}
 
     bind(): void {
-        requireElement('btn-prepare-export').addEventListener('click', () => void this.open());
         requireElement('btn-download').addEventListener('click', () => this.download());
         requireElement('btn-cancel').addEventListener('click', () => this.close());
     }
 
-    private async open(): Promise<void> {
-        const canvas = await html2canvas(this.stage, {
-            backgroundColor: CANVAS_BACKGROUND,
-            scale: CAPTURE_SCALE,
-            logging: false,
-        });
-
-        this.image.src = canvas.toDataURL('image/png');
+    async open(): Promise<void> {
+        this.image.src = this.capture(CAPTURE_SCALE).toDataURL('image/png');
         this.modal.classList.add('open');
         await waitForImage(this.image);
 
@@ -97,6 +92,8 @@ class ExportDialog {
     }
 }
 
-export const bindExportDialog = (stage: HTMLElement): void => {
-    new ExportDialog(stage).bind();
+export const createExportDialog = (capture: CaptureFn): (() => void) => {
+    const dialog = new ExportDialog(capture);
+    dialog.bind();
+    return () => void dialog.open();
 };

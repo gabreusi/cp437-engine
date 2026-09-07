@@ -8,71 +8,18 @@
 </head>
 <body>
 
-<!-- Palco: céu e chão dividem um único <pre> para alinhar na mesma grade. -->
+<!-- Palco: o grid de caracteres inteiro sai de um draw call neste canvas. -->
 <div id="stage">
-    <pre id="scene" aria-hidden="true"><span id="sky"></span><span id="floor"></span></pre>
+    <canvas id="canvas" aria-label="Cena ASCII"></canvas>
 </div>
 
-<!-- Régua invisível para medir uma célula da fonte monoespaçada. -->
-<pre id="probe" aria-hidden="true">0000000000</pre>
+<div id="hud" role="status"></div>
 
 <button id="handle" class="handle" type="button" title="Configurações" aria-label="Abrir configurações">⚙</button>
 
-<!--
-  Os sliders declaram só a faixa. O valor inicial e o rótulo vêm de src/config.ts,
-  para não existirem dois lugares dizendo qual é o padrão.
--->
+<!-- Os controles são gerados por src/ui/panel.ts a partir de src/config.ts. -->
 <div id="ui-wrapper">
-    <div class="panel-content">
-        <div class="control-group">
-            <label for="slider-speed">Velocidade: <span id="val-speed">—</span></label>
-            <input type="range" id="slider-speed" min="-5" max="5" step="0.1">
-        </div>
-        <div class="control-group">
-            <label for="slider-density">Densidade Estrelas: <span id="val-density">—</span></label>
-            <input type="range" id="slider-density" min="0" max="1" step="0.005">
-        </div>
-        <div class="control-group">
-            <label for="slider-horizon">Posição Horizonte: <span id="val-horizon">—</span></label>
-            <input type="range" id="slider-horizon" min="-2" max="2" step="0.01">
-        </div>
-        <div class="control-group">
-            <label for="slider-sun-offset">Altura do Sol: <span id="val-sun-offset">—</span></label>
-            <input type="range" id="slider-sun-offset" min="-50" max="50" step="1">
-        </div>
-        <div class="control-group">
-            <label for="slider-sun-size">Tamanho do Sol: <span id="val-sun-size">—</span></label>
-            <input type="range" id="slider-sun-size" min="0" max="2" step="0.05">
-        </div>
-        <div class="control-group">
-            <label for="slider-sun-slices">Cortes no Sol: <span id="val-sun-slices">—</span></label>
-            <input type="range" id="slider-sun-slices" min="0.2" max="3" step="0.1">
-        </div>
-        <div class="control-group">
-            <label for="slider-grid-height">Altura da Grid: <span id="val-grid-height">—</span></label>
-            <input type="range" id="slider-grid-height" min="0.15" max="1" step="0.05">
-        </div>
-        <div class="control-group">
-            <label for="slider-grid-width">Largura da Grid: <span id="val-grid-width">—</span></label>
-            <input type="range" id="slider-grid-width" min="0.15" max="1" step="0.05">
-        </div>
-
-        <div class="switch-group">
-            <label for="toggle-bg">Gradiente Fundo</label>
-            <input type="checkbox" id="toggle-bg" checked>
-        </div>
-        <div class="switch-group">
-            <label for="toggle-haze">Efeito Neblina</label>
-            <input type="checkbox" id="toggle-haze" checked>
-        </div>
-        <div class="switch-group">
-            <label for="toggle-glow">Efeito Glow</label>
-            <input type="checkbox" id="toggle-glow" checked>
-        </div>
-
-        <button id="btn-prepare-export" type="button">Exportar Imagem</button>
-        <button id="btn-close-wrapper" type="button">Fechar</button>
-    </div>
+    <div id="panel-content" class="panel-content"></div>
 </div>
 
 <div id="export-modal">
