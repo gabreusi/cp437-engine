@@ -1,5 +1,5 @@
 import { degreesToRadians, settings } from '../config';
-import { GLYPH, QUADRANT_BY_MASK, SUN_SHADES, verticalCoverageGlyph } from '../render/palette';
+import { GLYPH, QUADRANT_BY_MASK, SUN_SHADES } from '../render/palette';
 import { createProjected } from '../render/rasterizer';
 import { CELL_ASPECT } from '../render/viewport';
 import type { RenderContext, Renderable } from './scene';
@@ -126,26 +126,7 @@ export class Sun implements Renderable {
                 }
                 if (mask === 0) continue;
 
-                let glyph = mask === 0b1111 ? solidGlyph : (QUADRANT_BY_MASK[mask] ?? solidGlyph);
-
-                // No bordo superior a borda do disco é conhecida em forma
-                // fechada, então dá para medir a cobertura em vez de amostrar:
-                // oito níveis verticais em vez de dois. Só onde a borda é rasa
-                // — na lateral do disco ela é quase vertical, e ali uma fatia
-                // horizontal representaria a coisa errada.
-                const nx = deltaCol / radiusCols;
-                if (deltaRow < 0 && Math.abs(nx) < 1) {
-                    const root = Math.sqrt(1 - nx * nx);
-                    const edgeSlope = Math.abs((radiusRows * nx) / (radiusCols * root));
-
-                    if (edgeSlope <= 1) {
-                        const edgeRow = -radiusRows * root;
-                        const covered = deltaRow + 0.5 - Math.max(edgeRow, deltaRow - 0.5);
-                        if (covered <= 0) continue;
-                        if (covered < 1) glyph = verticalCoverageGlyph(covered);
-                    }
-                }
-
+                const glyph = mask === 0b1111 ? solidGlyph : (QUADRANT_BY_MASK[mask] ?? solidGlyph);
                 rasterizer.plotCell(centerCol + deltaCol, centerRow + deltaRow, glyph, color, Infinity);
             }
         }

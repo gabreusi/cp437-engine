@@ -108,12 +108,9 @@ export class Sky implements Renderable {
         colCount: number,
         rasterizer: RenderContext['rasterizer'],
     ): void {
-        // `─` e não `_`: o underscore da fonte assenta na base da célula, meia
-        // célula abaixo de onde a grade converge. O box-drawing fica no centro,
-        // que é onde o ponto de fuga realmente está.
         const target = Math.round(row);
         for (let col = 0; col < colCount; col += 1) {
-            rasterizer.plotCell(col, target, GLYPH.LINE_H, COLOR.HORIZON, Infinity);
+            rasterizer.plotCell(col, target, GLYPH.UNDERSCORE, COLOR.HORIZON, Infinity);
         }
     }
 }

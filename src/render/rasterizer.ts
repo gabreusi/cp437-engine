@@ -2,7 +2,6 @@ import * as mat4 from '../math/mat4';
 import { type Vec3, lerp, vec3 } from '../math/vec3';
 import type { Camera } from './camera';
 import type { Framebuffer } from './framebuffer';
-import { cornerGlyph } from './palette';
 import { CELL_ASPECT, type Viewport } from './viewport';
 
 /** Classe de inclinação do segmento já em espaço de tela. */
@@ -42,19 +41,14 @@ export interface Projected {
 const SLOPE_EPSILON = 1e-6;
 
 /**
- * Fronteiras entre vertical, diagonal e horizontal, em inclinação visual.
+ * Fronteiras entre `|`, as diagonais e `-`, em inclinação visual.
  *
- * A comparação é feita em pixels, não em células: a célula é 1:2, e um segmento
- * que anda duas colunas por fileira é uma diagonal de 45 graus na tela.
- *
- * Os limiares seguem a geometria dos glifos, não o ângulo. O `╱` liga canto a
- * canto, ou seja representa exatamente uma fileira por coluna — inclinação 2
- * nesta métrica. Um segmento bem mais raso desenhado com `╱` vira hachura
- * picotada em vez de linha, então a faixa diagonal fica centrada em 2 e o resto
- * cai em `─`, que emenda e sobe em degraus limpos.
+ * A comparação tem que ser feita em pixels, não em células: a célula é 1:2, e
+ * um segmento que anda duas colunas por fileira é uma diagonal de 45 graus na
+ * tela, não algo "predominantemente horizontal".
  */
-const VERTICAL_ABOVE = 4;
-const HORIZONTAL_BELOW = 1;
+const VERTICAL_ABOVE = 2.4;
+const HORIZONTAL_BELOW = 0.41;
 
 export class Rasterizer {
     private camera!: Camera;
@@ -206,73 +200,22 @@ export class Rasterizer {
         const slope = classifySlope(spanCol, spanRow);
         const steps = Math.max(1, Math.ceil(Math.max(Math.abs(spanCol), Math.abs(spanRow))));
 
-        // Cantos só fazem sentido onde a linha anda em degraus. Numa diagonal o
-        // avanço é de uma célula em cada eixo por passo, e todo cela viraria
-        // canto — `╱` já representa isso melhor.
-        const useCorners = slope === SLOPE.HORIZONTAL || slope === SLOPE.VERTICAL;
-
-        // Uma célula de atraso: o glifo da célula anterior só é decidido depois
-        // de saber se a linha virou ali.
-        let hasPending = false;
-        let pendingCol = 0;
-        let pendingRow = 0;
-        let pendingGlyph = 0;
-        let pendingColor = 0;
-        let pendingAlpha = 0;
-        let pendingDepth = 0;
-        let pendingIsCorner = false;
-
         for (let step = 0; step <= steps; step += 1) {
             const s = step / steps;
             const invW = startInvW + spanInvW * s;
             if (invW <= 0) continue;
 
             const depth = 1 / invW;
-            const col = Math.round(startCol + spanCol * s);
-            const row = Math.round(startRow + spanRow * s);
+            if (!style(depth, slope, this.fragment)) continue;
 
-            if (hasPending && col === pendingCol && row === pendingRow) continue;
-
-            if (!style(depth, slope, this.fragment)) {
-                // Descartada pela névoa, mas a pendente já foi aprovada.
-                if (hasPending) {
-                    this.framebuffer.plotLine(pendingCol, pendingRow, pendingGlyph, pendingColor, pendingDepth, pendingAlpha);
-                    hasPending = false;
-                }
-                continue;
-            }
-
-            let glyph = this.fragment.glyph;
-            let isCorner = false;
-
-            const stepped = hasPending && col !== pendingCol && row !== pendingRow;
-            if (stepped && useCorners) {
-                const goingRight = col > pendingCol;
-                const goingDown = row > pendingRow;
-
-                // A célula que sai liga ao vizinho de trás e ao degrau; a que
-                // entra liga ao degrau e ao vizinho da frente.
-                if (!pendingIsCorner) pendingGlyph = cornerGlyph(!goingRight, goingDown);
-                glyph = cornerGlyph(goingRight, !goingDown);
-                isCorner = true;
-            }
-
-            if (hasPending) {
-                this.framebuffer.plotLine(pendingCol, pendingRow, pendingGlyph, pendingColor, pendingDepth, pendingAlpha);
-            }
-
-            hasPending = true;
-            pendingCol = col;
-            pendingRow = row;
-            pendingGlyph = glyph;
-            pendingColor = this.fragment.color;
-            pendingAlpha = this.fragment.alpha;
-            pendingDepth = depth;
-            pendingIsCorner = isCorner;
-        }
-
-        if (hasPending) {
-            this.framebuffer.plotLine(pendingCol, pendingRow, pendingGlyph, pendingColor, pendingDepth, pendingAlpha);
+            this.framebuffer.plot(
+                Math.round(startCol + spanCol * s),
+                Math.round(startRow + spanRow * s),
+                this.fragment.glyph,
+                this.fragment.color,
+                depth,
+                this.fragment.alpha,
+            );
         }
     }
 
