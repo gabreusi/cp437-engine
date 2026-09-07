@@ -16,7 +16,8 @@ in vec2 vUv;
 out vec4 fragColor;
 
 uniform vec2 uSun;         // posição do sol em UV, y para cima
-uniform float uHorizon;    // altura do horizonte em UV, y para cima
+uniform float uHorizon;    // horizonte contínuo em UV, y para cima
+uniform float uGround;     // topo da bruma, alinhado à linha desenhada
 uniform vec2 uAspect;      // corrige o formato da janela nas distâncias
 uniform float uGroundHaze; // intensidade artística da bruma
 uniform float uHazeScale;  // alcance da bruma, derivado da névoa e da altitude
@@ -60,7 +61,7 @@ void main() {
     // 1/below reproduz a mesma névoa que apaga a grade — e a bruma passa a
     // crescer sozinha com a altitude, que é justamente quando o vão aparece.
     // O smoothstep existe só para a fronteira não serrilhar na fileira exata.
-    float below = uHorizon - vUv.y;
+    float below = uGround - vUv.y;
     float ground = smoothstep(0.0, 0.004, below) * min(1.0, uHazeScale / max(below, 1e-4));
 
     // O fundo é cenário, não protagonista: o neon é que tem que brilhar.
@@ -77,8 +78,17 @@ export interface Atmosphere {
     /** Posição do sol em UV, com y crescendo para cima. */
     sunU: number;
     sunV: number;
-    /** Altura do horizonte em UV, y para cima. */
+    /** Altura do horizonte em UV, y para cima. Contínua, para os halos. */
     horizonV: number;
+    /**
+     * Onde a bruma rasteira começa, em UV.
+     *
+     * Separado de `horizonV` porque o horizonte é desenhado com `_`, que a
+     * fonte assenta na base da célula, enquanto `horizonV` cai na borda de
+     * cima dela. Sem isso a bruma começa uma célula acima da linha e passa
+     * por cima dela.
+     */
+    groundV: number;
     /**
      * Alcance da bruma rasteira, em unidades de UV.
      *
@@ -104,6 +114,7 @@ export class BackgroundPass {
         gl.uniform2f(this.program.uniform('uAspect'), Math.max(1, aspect), Math.max(1, 1 / aspect));
         gl.uniform2f(this.program.uniform('uSun'), atmosphere.sunU, atmosphere.sunV);
         gl.uniform1f(this.program.uniform('uHorizon'), atmosphere.horizonV);
+        gl.uniform1f(this.program.uniform('uGround'), atmosphere.groundV);
         gl.uniform1f(this.program.uniform('uGroundHaze'), groundHaze);
         gl.uniform1f(this.program.uniform('uHazeScale'), atmosphere.hazeScale);
 

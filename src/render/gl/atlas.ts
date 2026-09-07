@@ -28,6 +28,14 @@ export interface GlyphAtlas {
     cols: number;
     rows: number;
     cellWidth: number;
+    /**
+     * O canvas de origem, guardado para inspeção.
+     *
+     * O atlas é a única parte da engine que não dá para conferir pelo
+     * framebuffer: quando um glifo sai errado na tela mas certo no buffer, a
+     * resposta está aqui.
+     */
+    canvas: HTMLCanvasElement;
 }
 
 interface CellBox {
@@ -47,34 +55,43 @@ const BAYER_4X4 = [
     15, 7, 13, 5,
 ];
 
+/**
+ * Retângulo em coordenadas fracionárias da célula.
+ *
+ * As duas bordas são arredondadas, em vez de arredondar o tamanho: com célula
+ * de largura ímpar, `ceil` de meia largura estoura meio pixel para dentro da
+ * célula vizinha, e o vazamento aparece como um traço fantasma no glifo do
+ * lado. Arredondando as bordas, sub-retângulos adjacentes continuam emendando
+ * — a borda direita de um é o mesmo número da borda esquerda do outro — e nada
+ * ultrapassa a célula.
+ */
+const spanRect = (
+    ctx: CanvasRenderingContext2D,
+    box: CellBox,
+    fx: number,
+    fy: number,
+    fw: number,
+    fh: number,
+): void => {
+    const x0 = Math.round(box.x + fx * box.w);
+    const y0 = Math.round(box.y + fy * box.h);
+    const x1 = Math.round(box.x + (fx + fw) * box.w);
+    const y1 = Math.round(box.y + (fy + fh) * box.h);
+    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+};
+
 /** Preenche sub-blocos conforme a densidade, num padrão que casa entre células. */
 const dither = (density: number): GlyphPainter => (ctx, box) => {
-    const stepX = box.w / 4;
-    const stepY = box.h / 4;
     const threshold = density * 16;
 
     for (let index = 0; index < 16; index += 1) {
         if ((BAYER_4X4[index] ?? 16) >= threshold) continue;
-        const col = index % 4;
-        const row = Math.floor(index / 4);
-        // Ceil para não deixar fresta de subpixel entre os blocos.
-        ctx.fillRect(
-            box.x + col * stepX,
-            box.y + row * stepY,
-            Math.ceil(stepX),
-            Math.ceil(stepY),
-        );
+        spanRect(ctx, box, (index % 4) / 4, Math.floor(index / 4) / 4, 1 / 4, 1 / 4);
     }
 };
 
-/** Retângulo em coordenadas fracionárias da célula. */
 const rect = (fx: number, fy: number, fw: number, fh: number): GlyphPainter => (ctx, box) => {
-    ctx.fillRect(
-        box.x + fx * box.w,
-        box.y + fy * box.h,
-        Math.ceil(fw * box.w),
-        Math.ceil(fh * box.h),
-    );
+    spanRect(ctx, box, fx, fy, fw, fh);
 };
 
 const compose = (...painters: GlyphPainter[]): GlyphPainter => (ctx, box) => {
@@ -103,6 +120,12 @@ const PAINTERS: Record<string, GlyphPainter> = {
     '▄': rect(0, 0.5, 1, 0.5),
     '▌': rect(0, 0, 0.5, 1),
     '▐': rect(0.5, 0, 0.5, 1),
+    // Espessura semelhante à do `_` da fonte, mas colado na base da célula.
+    '▁': (ctx, box) => {
+        const thickness = Math.max(1, Math.round(box.w * 0.14));
+        spanRect(ctx, box, 0, 1 - thickness / box.h, 1, thickness / box.h);
+    },
+
     '▚': compose(rect(0, 0, 0.5, 0.5), rect(0.5, 0.5, 0.5, 0.5)),
     '▞': compose(rect(0.5, 0, 0.5, 0.5), rect(0, 0.5, 0.5, 0.5)),
     '▛': compose(rect(0, 0, 1, 0.5), rect(0, 0.5, 0.5, 0.5)),
@@ -171,5 +194,5 @@ export const buildGlyphAtlas = (gl: WebGL2RenderingContext, cellWidth: number): 
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    return { texture, cols, rows, cellWidth };
+    return { texture, cols, rows, cellWidth, canvas };
 };

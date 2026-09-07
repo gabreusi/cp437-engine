@@ -13,7 +13,7 @@
  * cobrem os 16 padrões possíveis de uma amostragem 2x2 e são desenhados
  * proceduralmente no atlas — ver `atlas.ts` para o porquê.
  */
-export const CHARSET = ' ·•+*█▓▒░-_|/\\' + '▘▝▖▗▀▄▌▐▚▞▛▜▙▟';
+export const CHARSET = ' ·•+*█▓▒░-_|/\\' + '▘▝▖▗▀▄▌▐▚▞▛▜▙▟' + '▁';
 
 export const GLYPH = {
     BLANK: 0,
@@ -45,6 +45,15 @@ export const GLYPH = {
     QUAD_NO_BL: 25,
     QUAD_NO_TR: 26,
     QUAD_NO_TL: 27,
+
+    /**
+     * Traço rente à base da célula, para a linha do horizonte.
+     *
+     * Existe porque o `_` da fonte desenha acima da base, e a bruma rasteira
+     * precisa começar exatamente onde a linha termina. Com um glifo desenhado
+     * por nós, a posição é conhecida em vez de herdada da métrica da fonte.
+     */
+    GROUND_LINE: 28,
 } as const;
 
 /**

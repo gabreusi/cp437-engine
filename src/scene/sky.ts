@@ -108,9 +108,12 @@ export class Sky implements Renderable {
         colCount: number,
         rasterizer: RenderContext['rasterizer'],
     ): void {
+        // `GROUND_LINE` e não `_`: a bruma rasteira começa na base desta célula,
+        // e o underscore da fonte para antes dela, deixando uma fresta de céu
+        // entre a linha e a bruma.
         const target = Math.round(row);
         for (let col = 0; col < colCount; col += 1) {
-            rasterizer.plotCell(col, target, GLYPH.UNDERSCORE, COLOR.HORIZON, Infinity);
+            rasterizer.plotCell(col, target, GLYPH.GROUND_LINE, COLOR.HORIZON, Infinity);
         }
     }
 }
