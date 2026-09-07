@@ -15,6 +15,8 @@ export class RenderTarget {
         private readonly gl: WebGL2RenderingContext,
         width: number,
         height: number,
+        /** Meia precisão, para o que passa de 1 sobreviver até o bloom. */
+        private readonly hdr = false,
     ) {
         const texture = gl.createTexture();
         const framebuffer = gl.createFramebuffer();
@@ -56,11 +58,18 @@ export class RenderTarget {
 
         // texImage2D e não texStorage2D: o alvo é redimensionado a cada resize
         // da janela, e texStorage2D deixaria a textura imutável.
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture);
-        this.gl.texImage2D(
-            this.gl.TEXTURE_2D, 0, this.gl.RGBA8,
+        //
+        // RGBA16F é filtrável por padrão no WebGL2, então o LINEAR que faz o
+        // downsample do bloom continua valendo sem extensão nenhuma.
+        const { gl } = this;
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.texImage2D(
+            gl.TEXTURE_2D, 0,
+            this.hdr ? gl.RGBA16F : gl.RGBA8,
             nextWidth, nextHeight, 0,
-            this.gl.RGBA, this.gl.UNSIGNED_BYTE, null,
+            gl.RGBA,
+            this.hdr ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE,
+            null,
         );
     }
 

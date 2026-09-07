@@ -6,6 +6,8 @@
  * quando não existia câmera. Horizonte agora é para onde a câmera olha, e o sol
  * tem elevação e azimute como qualquer corpo celeste.
  */
+import type { RampMode } from './render/ramp';
+
 export interface Settings {
     fovDegrees: number;
     moveSpeed: number;
@@ -34,6 +36,35 @@ export interface Settings {
 
     starCount: number;
 
+    lightingEnabled: boolean;
+    shadowsEnabled: boolean;
+    reflectionsEnabled: boolean;
+    /** Luz que chega de todo lado. Sem ela, o que está na sombra some. */
+    ambientLevel: number;
+    /** Força do sol como luz direcional, separada do brilho do disco. */
+    sunLightIntensity: number;
+    /** Quanto o céu vale quando é refletido por uma superfície. */
+    skyReflectionIntensity: number;
+    /**
+     * Brilho próprio das linhas da grade.
+     *
+     * A grade é neon, não asfalto: ela emite. Sem isto ela seria uma superfície
+     * horizontal iluminada por um sol a quatro graus, ou seja, praticamente
+     * preta — fisicamente correto e completamente errado para o estilo. Este é
+     * o valor que reproduz o brilho que ela sempre teve, e a luz entra por cima.
+     */
+    gridGlow: number;
+    /** Quanto do reflexo a grade devolve. Ela reflete, mas não é espelho. */
+    groundReflectivity: number;
+    /** Expoente do lóbulo da grade. Baixo espalha o sol numa coluna larga. */
+    groundGloss: number;
+    /** Como a luz escolhe o caractere: rampa clássica, por família, ou nunca. */
+    glyphRamp: RampMode;
+    /** Exposição da rampa: onde a luminância vira caractere cheio. */
+    rampExposure: number;
+    /** Teto de luzes que projetam sombra num mesmo fragmento. */
+    maxShadowLights: number;
+
     bloomIntensity: number;
     bloomRadius: number;
     scanlineStrength: number;
@@ -58,6 +89,19 @@ export const settings: Settings = {
     sunSlices: 1.1,
 
     starCount: 1400,
+
+    lightingEnabled: true,
+    shadowsEnabled: true,
+    reflectionsEnabled: true,
+    ambientLevel: 0.16,
+    gridGlow: 0.62,
+    sunLightIntensity: 0.9,
+    skyReflectionIntensity: 1,
+    groundReflectivity: 0.55,
+    groundGloss: 26,
+    glyphRamp: 'family',
+    rampExposure: 0.75,
+    maxShadowLights: 3,
 
     bloomIntensity: 0.55,
     bloomRadius: 1.6,

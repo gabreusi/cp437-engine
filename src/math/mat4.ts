@@ -83,3 +83,21 @@ export const transformDirection = (out: Vec3, m: Mat4, x: number, y: number, z: 
     out.z = m[2]! * x + m[6]! * y + m[10]! * z;
     return out;
 };
+
+/**
+ * Transforma uma direção pela transposta da parte rotacional.
+ *
+ * Para uma matriz de rotação a transposta é a inversa, então isto desfaz a
+ * rotação sem inverter matriz nenhuma. É o que leva um ponto do espaço local de
+ * um objeto de volta para o mundo, dada a mesma matriz que o traçado de raio usa
+ * para ir na direção contrária — e usar a mesma matriz nos dois sentidos é o que
+ * garante que a caixa desenhada e a caixa testada sejam a mesma caixa.
+ */
+export const transformDirectionTransposed = (
+    out: Vec3, m: Mat4, x: number, y: number, z: number,
+): Vec3 => {
+    out.x = m[0]! * x + m[1]! * y + m[2]! * z;
+    out.y = m[4]! * x + m[5]! * y + m[6]! * z;
+    out.z = m[8]! * x + m[9]! * y + m[10]! * z;
+    return out;
+};

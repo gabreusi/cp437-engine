@@ -1,17 +1,14 @@
 {
-  "name": "outrun-ascii",
+  "name": "cp437-engine",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Gerador de wallpaper outrun em ASCII animado",
+  "description": "Engine 3D que rasteriza para caracteres, com luz colorida, sombras e reflexos",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "cropperjs": "1.6.1"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

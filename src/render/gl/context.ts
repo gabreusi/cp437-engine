@@ -11,6 +11,16 @@ import type { Viewport } from '../viewport';
 export class GlContext {
     readonly gl: WebGL2RenderingContext;
 
+    /**
+     * Dá para renderizar em ponto flutuante?
+     *
+     * O sombreamento produz valores acima de 1 e é justamente o excesso que
+     * vira halo no bloom. Num alvo de oito bits ele é cortado antes de o bloom
+     * ver, e todo núcleo brilhante fica branco e do mesmo tamanho. Onde a
+     * extensão não existe a cena ainda funciona — só perde o estouro.
+     */
+    readonly hdr: boolean;
+
     private lost = false;
     private readonly restoreHandlers: (() => void)[] = [];
 
@@ -30,6 +40,10 @@ export class GlContext {
             throw new Error('WebGL2 não disponível neste navegador.');
         }
         this.gl = gl;
+
+        // Basta meia precisão: a faixa vai de 0 a uns poucos, não a milhares.
+        this.hdr = gl.getExtension('EXT_color_buffer_half_float') !== null
+            || gl.getExtension('EXT_color_buffer_float') !== null;
 
         canvas.addEventListener('webglcontextlost', (event) => {
             event.preventDefault();

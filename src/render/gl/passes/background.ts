@@ -1,3 +1,4 @@
+import { SKY_GLSL } from '../../sky-colors';
 import { FULLSCREEN_VERTEX, drawFullscreen } from '../fullscreen';
 import { Program } from '../program';
 
@@ -22,11 +23,7 @@ uniform vec2 uAspect;      // corrige o formato da janela nas distâncias
 uniform float uGroundHaze; // intensidade artística da bruma
 uniform float uHazeScale;  // alcance da bruma, derivado da névoa e da altitude
 
-const vec3 VOID_COLOR = vec3(0.020, 0.000, 0.055);
-const vec3 PINK = vec3(1.000, 0.235, 0.745);
-const vec3 CYAN = vec3(0.000, 0.886, 1.000);
-const vec3 PURPLE = vec3(0.290, 0.024, 0.408);
-const vec3 HAZE = vec3(0.100, 0.280, 0.360);
+${SKY_GLSL}
 
 /**
  * Queda suave em torno de uma elipse.
@@ -66,9 +63,9 @@ void main() {
 
     // O fundo é cenário, não protagonista: o neon é que tem que brilhar.
     vec3 color = VOID_COLOR;
-    color += PURPLE * wash * 0.30;
-    color += PINK * glow * 0.22;
-    color += CYAN * band * 0.10;
+    color += PURPLE * wash * WASH_WEIGHT;
+    color += PINK * glow * GLOW_WEIGHT;
+    color += CYAN * band * BAND_WEIGHT;
     color += HAZE * ground * uGroundHaze;
 
     fragColor = vec4(color, 1.0);

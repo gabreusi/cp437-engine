@@ -1,5 +1,6 @@
+import { toHex } from '../math/color';
 import type { Framebuffer } from './framebuffer';
-import { CHARSET, PALETTE } from './palette';
+import { CHARSET } from './palette';
 
 /**
  * Despeja o framebuffer como texto.
@@ -16,7 +17,7 @@ export const dumpGlyphs = (framebuffer: Framebuffer): string => {
     for (let row = 0; row < framebuffer.rowCount; row += 1) {
         let line = '';
         for (let col = 0; col < framebuffer.colCount; col += 1) {
-            const glyph = framebuffer.data[(row * framebuffer.colCount + col) * 4] ?? 0;
+            const glyph = framebuffer.cells[(row * framebuffer.colCount + col) * 4] ?? 0;
             line += CHARSET[glyph] ?? '?';
         }
         lines.push(line);
@@ -24,15 +25,29 @@ export const dumpGlyphs = (framebuffer: Framebuffer): string => {
     return lines.join('\n');
 };
 
-/** Quantas células cada cor da paleta ocupa. Útil para achar camada sumida. */
+/**
+ * Quantas células cada cor ocupa. Útil para achar camada sumida.
+ *
+ * Agrupa por hex e não por índice porque a paleta indexada não existe mais.
+ * Com luz colorida a contagem vira uma cauda longa de tons parecidos, então o
+ * resultado sai ordenado: as poucas cores que dominam a tela são as camadas do
+ * cenário, e é sobre elas que a pergunta costuma ser.
+ */
 export const countByColor = (framebuffer: Framebuffer): Record<string, number> => {
-    const counts: Record<string, number> = {};
+    const counts = new Map<string, number>();
+    const { cells, colors } = framebuffer;
 
-    for (let index = 1; index < framebuffer.data.length; index += 4) {
-        const color = framebuffer.data[index] ?? 0;
-        if (color === 0) continue;
-        const key = `${color} ${PALETTE[color] ?? '?'}`;
-        counts[key] = (counts[key] ?? 0) + 1;
+    for (let offset = 0; offset < cells.length; offset += 4) {
+        // Alpha zero é célula vazia; contar isso afogaria o resto.
+        if ((cells[offset + 1] ?? 0) === 0) continue;
+
+        const key = toHex({
+            r: (colors[offset] ?? 0) / 255,
+            g: (colors[offset + 1] ?? 0) / 255,
+            b: (colors[offset + 2] ?? 0) / 255,
+        });
+        counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    return counts;
+
+    return Object.fromEntries([...counts].sort((a, b) => b[1] - a[1]));
 };

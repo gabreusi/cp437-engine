@@ -1,7 +1,7 @@
 import { CHARSET } from '../palette';
 import { CELL_ASPECT } from '../viewport';
 
-/** Colunas no atlas. Sobra espaço para dígitos e letras quando o HUD precisar. */
+/** Colunas no atlas. Com 128 glifos, o atlas fecha em oito fileiras exatas. */
 export const ATLAS_COLS = 16;
 
 const FONT_STACK = '"Courier New", Consolas, "DejaVu Sans Mono", monospace';
@@ -10,7 +10,16 @@ const FONT_STACK = '"Courier New", Consolas, "DejaVu Sans Mono", monospace';
 const MEASURE_SIZE = 100;
 
 const MIN_CELL = 6;
-const MAX_CELL = 128;
+
+/**
+ * Teto do tamanho de célula no atlas.
+ *
+ * Com 256 glifos o atlas tem dezesseis fileiras, então a célula multiplica por
+ * 32 na altura da textura. Sessenta e quatro dá 1024x2048, dentro do limite de
+ * qualquer GPU que rode WebGL2, e a célula só chegaria perto disso numa janela
+ * de doze mil pixels de largura.
+ */
+const MAX_CELL = 64;
 
 /**
  * Largura de célula do atlas para um dado tamanho de célula em pixels de tela.
@@ -69,19 +78,100 @@ const spanRect = (
     ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 };
 
+/** Fração da largura da célula que um traço da moldura ocupa. */
+const STROKE = 0.14;
+
+/**
+ * Traço centrado, em fração da célula.
+ *
+ * A moldura tem que emendar entre células vizinhas, então o traço vai de borda
+ * a borda e o miolo é o cruzamento. Centralizar pela espessura, e não pela
+ * metade exata, é o que faz `┌` e `└` alinharem a mesma coluna vertical.
+ */
+const strokeSpans = (box: CellBox) => {
+    const thickness = Math.max(1, Math.round(box.w * STROKE));
+    const tx = thickness / box.w;
+    const ty = thickness / box.h;
+    return { tx, ty, cx: 0.5 - tx / 2, cy: 0.5 - ty / 2 };
+};
+
+/**
+ * Metades de traço que cada glifo de moldura acende.
+ *
+ * Descrever por direção em vez de desenhar cada um à mão: onze glifos são a
+ * mesma cruz com braços diferentes ligados, e escrever onze funções separadas
+ * seria onze chances de desalinhar o centro.
+ */
+const boxPainter =
+    (left: boolean, right: boolean, up: boolean, down: boolean): GlyphPainter =>
+    (ctx, box) => {
+        const { tx, ty, cx, cy } = strokeSpans(box);
+        if (left) spanRect(ctx, box, 0, cy, cx + tx, ty);
+        if (right) spanRect(ctx, box, cx, cy, 1 - cx, ty);
+        if (up) spanRect(ctx, box, cx, 0, tx, cy + ty);
+        if (down) spanRect(ctx, box, cx, cy, tx, 1 - cy);
+    };
+
+/** Triângulo cheio apontando para um lado. As setas dos sliders do menu. */
+const arrowPainter =
+    (dx: number, dy: number): GlyphPainter =>
+    (ctx, box) => {
+        // Recuado da borda: encostado, a seta lê como bloco e some do slider.
+        const inset = 0.2;
+        const half = 0.5 - inset;
+        const cx = box.x + box.w / 2;
+        const cy = box.y + box.h / 2;
+
+        ctx.beginPath();
+        ctx.moveTo(cx + dx * half * box.w, cy + dy * half * box.h);
+        ctx.lineTo(cx - (dx * half + dy * half) * box.w, cy - (dy * half + dx * half) * box.h);
+        ctx.lineTo(cx - (dx * half - dy * half) * box.w, cy - (dy * half - dx * half) * box.h);
+        ctx.closePath();
+        ctx.fill();
+    };
+
 /**
  * Glifos desenhados à mão, não tirados da fonte.
  *
- * Só a linha do horizonte. A fonte desenha numa caixa de proporção própria
- * (~1:1,67) enquanto a célula é 1:2, então o `_` para antes da base e sobra
- * uma fresta de céu entre a linha e a bruma rasteira.
+ * A fonte desenha numa caixa de proporção própria (~1:1,67) enquanto a célula é
+ * 1:2, e nada que precise encostar na borda sobrevive a isso: o `_` para antes
+ * da base, e uma moldura de menu sairia com fresta em cada emenda.
  */
 const PAINTERS: Record<string, GlyphPainter> = {
+    /**
+     * O bloco cheio, encostando nas quatro bordas.
+     *
+     * O `█` da fonte para antes da base — a mesma métrica de 1:1,67 numa célula
+     * 1:2 — e o resultado é uma fresta horizontal entre fileiras. Numa silhueta
+     * de sol isso é um detalhe; num fundo de menu é a cena inteira aparecendo
+     * através de listras.
+     */
+    '█': (ctx, box) => spanRect(ctx, box, 0, 0, 1, 1),
+    '▀': (ctx, box) => spanRect(ctx, box, 0, 0, 1, 0.5),
+    '▄': (ctx, box) => spanRect(ctx, box, 0, 0.5, 1, 0.5),
+
     // Espessura semelhante à do `_` da fonte, mas colado na base da célula.
     '▁': (ctx, box) => {
-        const thickness = Math.max(1, Math.round(box.w * 0.14));
+        const thickness = Math.max(1, Math.round(box.w * STROKE));
         spanRect(ctx, box, 0, 1 - thickness / box.h, 1, thickness / box.h);
     },
+
+    '─': boxPainter(true, true, false, false),
+    '│': boxPainter(false, false, true, true),
+    '┌': boxPainter(false, true, false, true),
+    '┐': boxPainter(true, false, false, true),
+    '└': boxPainter(false, true, true, false),
+    '┘': boxPainter(true, false, true, false),
+    '├': boxPainter(false, true, true, true),
+    '┤': boxPainter(true, false, true, true),
+    '┬': boxPainter(true, true, false, true),
+    '┴': boxPainter(true, true, true, false),
+    '┼': boxPainter(true, true, true, true),
+
+    '◄': arrowPainter(-1, 0),
+    '►': arrowPainter(1, 0),
+    '▲': arrowPainter(0, -1),
+    '▼': arrowPainter(0, 1),
 };
 
 /**

@@ -81,12 +81,13 @@ export class GlPresenter implements Presenter {
         const width = Math.max(1, this.viewport?.pixelWidth ?? 1);
         const height = Math.max(1, this.viewport?.pixelHeight ?? 1);
 
+        const { hdr } = this.context;
         this.resources = {
             grid: new GridPass(gl),
             background: new BackgroundPass(gl),
-            bloom: new BloomPass(gl, width, height),
+            bloom: new BloomPass(gl, width, height, hdr),
             composite: new CompositePass(gl),
-            scene: new RenderTarget(gl, width, height),
+            scene: new RenderTarget(gl, width, height, hdr),
             atlas: null,
             atlasCellWidth: 0,
         };

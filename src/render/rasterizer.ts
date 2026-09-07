@@ -1,5 +1,6 @@
 import * as mat4 from '../math/mat4';
-import { type Vec3, lerp, vec3 } from '../math/vec3';
+import { type Rgb, rgb } from '../math/color';
+import { type Vec3, lerp, set, vec3 } from '../math/vec3';
 import type { Camera } from './camera';
 import type { Framebuffer } from './framebuffer';
 import { CELL_ASPECT, type Viewport } from './viewport';
@@ -18,18 +19,44 @@ export type Slope = (typeof SLOPE)[keyof typeof SLOPE];
 
 export interface Fragment {
     glyph: number;
-    color: number;
+    /**
+     * Escreva *dentro* dela; não troque a referência.
+     *
+     * O fragmento é reaproveitado entre todos os estilos do quadro. Apontar
+     * `color` para uma cor nomeada faria o próximo estilo, que escreve nos
+     * componentes, sobrescrever essa constante — e a paleta mudaria de cor no
+     * meio da cena.
+     */
+    color: Rgb;
+    /** Cobertura da célula, de 0 a 1. É por onde a névoa dissolve a grade. */
     alpha: number;
+    /** Brilho acima de 1. Só ele passa do tone map e vira halo no bloom. */
+    emissive: number;
+}
+
+/**
+ * O fragmento de superfície entregue ao estilo.
+ *
+ * A posição em mundo entrou porque sem ela não há iluminação: sombra e reflexo
+ * são perguntas sobre *onde* o fragmento está, não sobre quão longe ele está da
+ * câmera. O rasterizador é quem sabe responder, porque é ele que interpola.
+ */
+export interface SurfaceSample {
+    x: number;
+    y: number;
+    z: number;
+    depth: number;
+    slope: Slope;
 }
 
 /**
  * Decide a aparência de um fragmento. A geometria é do rasterizador, a estética
  * é da cena — é isto que mantém a escolha de glifo e a névoa fora daqui.
  *
- * Devolver `false` descarta o fragmento; é assim que o dithering da névoa
- * dissolve a grade ao longe.
+ * Devolver `false` descarta o fragmento; é assim que a névoa dissolve a grade
+ * ao longe sem o rasterizador saber o que é névoa.
  */
-export type LineStyle = (depth: number, slope: Slope, out: Fragment) => boolean;
+export type SurfaceStyle = (sample: SurfaceSample, out: Fragment) => boolean;
 
 export interface Projected {
     col: number;
@@ -64,7 +91,12 @@ export class Rasterizer {
     private readonly viewA: Vec3 = vec3();
     private readonly viewB: Vec3 = vec3();
     private readonly clipped: Vec3 = vec3();
-    private readonly fragment: Fragment = { glyph: 0, color: 0, alpha: 255 };
+    private readonly worldA: Vec3 = vec3();
+    private readonly worldB: Vec3 = vec3();
+    private readonly fragment: Fragment = { glyph: 0, color: rgb(), alpha: 1, emissive: 0 };
+    private readonly sample: SurfaceSample = { x: 0, y: 0, z: 0, depth: 0, slope: SLOPE.HORIZONTAL };
+    private readonly spanA = createProjected();
+    private readonly spanB = createProjected();
 
     private t0 = 0;
     private t1 = 1;
@@ -119,9 +151,15 @@ export class Rasterizer {
     }
 
     /** Segmento em coordenadas de mundo. */
-    line(ax: number, ay: number, az: number, bx: number, by: number, bz: number, style: LineStyle): void {
+    line(
+        ax: number, ay: number, az: number,
+        bx: number, by: number, bz: number,
+        style: SurfaceStyle,
+    ): void {
         mat4.transformPoint(this.viewA, this.camera.view, ax, ay, az);
         mat4.transformPoint(this.viewB, this.camera.view, bx, by, bz);
+        set(this.worldA, ax, ay, az);
+        set(this.worldB, bx, by, bz);
         this.lineFromView(this.viewA, this.viewB, style);
     }
 
@@ -132,7 +170,7 @@ export class Rasterizer {
      * perspectiva: um ponto atrás da câmera projeta para coordenadas sem
      * sentido, e a linha atravessa a tela inteira em vez de sumir.
      */
-    private lineFromView(a: Vec3, b: Vec3, style: LineStyle): void {
+    private lineFromView(a: Vec3, b: Vec3, style: SurfaceStyle): void {
         let wa = -a.z;
         let wb = -b.z;
 
@@ -141,18 +179,22 @@ export class Rasterizer {
         let ax = a.x, ay = a.y;
         let bx = b.x, by = b.y;
 
+        // A posição de mundo acompanha o mesmo `t` do corte: a transformação de
+        // view é afim, então o parâmetro do segmento é o mesmo nos dois espaços.
         if (wa <= this.near) {
             const t = (this.near - wa) / (wb - wa);
             lerp(this.clipped, a, b, t);
             ax = this.clipped.x;
             ay = this.clipped.y;
             wa = this.near;
+            lerp(this.worldA, this.worldA, this.worldB, t);
         } else if (wb <= this.near) {
             const t = (this.near - wb) / (wa - wb);
             lerp(this.clipped, b, a, t);
             bx = this.clipped.x;
             by = this.clipped.y;
             wb = this.near;
+            lerp(this.worldB, this.worldB, this.worldA, t);
         }
 
         const col0 = ((ax * this.focalX) / wa * 0.5 + 0.5) * this.colCount;
@@ -173,11 +215,17 @@ export class Rasterizer {
      * A profundidade é interpolada em `1/w`, não em `w`: só o inverso é linear
      * em espaço de tela. Interpolar `w` faria a névoa escorregar ao longo das
      * linhas conforme a câmera gira.
+     *
+     * A posição de mundo segue a mesma regra, e pelo mesmo motivo: o que é
+     * linear em tela é `mundo / w`, não `mundo`. Interpolado direto, a sombra
+     * projetada numa linha da grade escorregaria ao longo dela quando a câmera
+     * girasse — o mesmo defeito da névoa, agora visível como a sombra saindo
+     * de debaixo do objeto.
      */
     private drawScreenLine(
         col0: number, row0: number, invW0: number,
         col1: number, row1: number, invW1: number,
-        style: LineStyle,
+        style: SurfaceStyle,
     ): void {
         const deltaCol = col1 - col0;
         const deltaRow = row1 - row0;
@@ -197,8 +245,23 @@ export class Rasterizer {
         const startInvW = invW0 + (invW1 - invW0) * this.t0;
         const spanInvW = (invW1 - invW0) * (this.t1 - this.t0);
 
+        // Mundo dividido por w nas duas pontas, já estreitado pelo clip de tela.
+        const wa0 = this.worldA.x * invW0, wa1 = this.worldB.x * invW1;
+        const wb0 = this.worldA.y * invW0, wb1 = this.worldB.y * invW1;
+        const wc0 = this.worldA.z * invW0, wc1 = this.worldB.z * invW1;
+
+        const startWx = wa0 + (wa1 - wa0) * this.t0;
+        const spanWx = (wa1 - wa0) * (this.t1 - this.t0);
+        const startWy = wb0 + (wb1 - wb0) * this.t0;
+        const spanWy = (wb1 - wb0) * (this.t1 - this.t0);
+        const startWz = wc0 + (wc1 - wc0) * this.t0;
+        const spanWz = (wc1 - wc0) * (this.t1 - this.t0);
+
         const slope = classifySlope(spanCol, spanRow);
         const steps = Math.max(1, Math.ceil(Math.max(Math.abs(spanCol), Math.abs(spanRow))));
+
+        const sample = this.sample;
+        sample.slope = slope;
 
         for (let step = 0; step <= steps; step += 1) {
             const s = step / steps;
@@ -206,7 +269,12 @@ export class Rasterizer {
             if (invW <= 0) continue;
 
             const depth = 1 / invW;
-            if (!style(depth, slope, this.fragment)) continue;
+            sample.depth = depth;
+            sample.x = (startWx + spanWx * s) * depth;
+            sample.y = (startWy + spanWy * s) * depth;
+            sample.z = (startWz + spanWz * s) * depth;
+
+            if (!style(sample, this.fragment)) continue;
 
             this.framebuffer.plot(
                 Math.round(startCol + spanCol * s),
@@ -215,6 +283,7 @@ export class Rasterizer {
                 this.fragment.color,
                 depth,
                 this.fragment.alpha,
+                this.fragment.emissive,
             );
         }
     }
@@ -245,6 +314,122 @@ export class Rasterizer {
     }
 
     /**
+     * A quantas células, na tela, dois pontos de mundo caem um do outro.
+     *
+     * É o que permite a uma superfície decidir sozinha o quanto se subdividir:
+     * a resposta certa não é "que distância eu estou", é "a que distância na
+     * tela as minhas linhas estão caindo". A diferença aparece quando a placa
+     * está inclinada — de esguelha ela precisa de menos linhas, não de mais — e
+     * quando o campo de visão muda, que um critério de distância ignoraria.
+     *
+     * A métrica é Chebyshev, e não euclidiana, porque a pergunta é sobre
+     * células e não sobre pixels: duas linhas sem gap são duas linhas que não
+     * pulam nenhuma coluna nem nenhuma fileira.
+     *
+     * `Infinity` quando um dos extremos está atrás do near plane — está colado
+     * na câmera, e densidade máxima é a resposta certa.
+     */
+    screenSpan(
+        ax: number, ay: number, az: number,
+        bx: number, by: number, bz: number,
+    ): number {
+        if (!this.project(ax, ay, az, this.spanA)) return Infinity;
+        if (!this.project(bx, by, bz, this.spanB)) return Infinity;
+
+        return Math.max(
+            Math.abs(this.spanB.col - this.spanA.col),
+            Math.abs(this.spanB.row - this.spanA.row),
+        );
+    }
+
+    /**
+     * Raio em fileiras de tela de uma esfera de raio conhecido, a uma distância.
+     *
+     * A contraparte de `angularRadiusRows` para o que está perto: o sol não tem
+     * tamanho em unidades de mundo, um orbe tem. A aproximação de tratar a
+     * esfera como um disco perpendicular ao olhar erra pouco enquanto ela for
+     * pequena na tela, que é o caso de tudo que não está colado na câmera.
+     */
+    radiusRowsAt(worldRadius: number, depth: number): number {
+        return (worldRadius * this.focalY / depth) * 0.5 * this.rowCount;
+    }
+
+    /**
+     * Percorre as células de um disco em espaço de tela.
+     *
+     * Em espaço de tela e não em mundo porque um corpo redondo sempre encara a
+     * câmera: é o mesmo argumento que faz o sol ser preenchido assim. O laço já
+     * sai recortado na janela — um disco fora de vista não deve custar o disco
+     * inteiro — e `lastRow` é o recorte extra que o sol usa para assentar no
+     * horizonte.
+     *
+     * `nx` e `ny` chegam normalizados de -1 a 1, com a proporção da célula já
+     * compensada: é isso que faz o círculo sair redondo e não ovalado.
+     */
+    disc(
+        center: Projected,
+        radiusRows: number,
+        lastRow: number,
+        visit: (col: number, row: number, nx: number, ny: number) => void,
+    ): void {
+        const radiusCols = radiusRows * CELL_ASPECT;
+        const centerCol = Math.round(center.col);
+        const centerRow = Math.round(center.row);
+
+        const minRow = Math.max(-Math.ceil(radiusRows), -centerRow);
+        const maxRow = Math.min(Math.ceil(radiusRows), lastRow - centerRow);
+        const minCol = Math.max(-Math.ceil(radiusCols), -centerCol);
+        const maxCol = Math.min(Math.ceil(radiusCols), this.colCount - 1 - centerCol);
+
+        for (let deltaRow = minRow; deltaRow <= maxRow; deltaRow += 1) {
+            const ny = deltaRow / radiusRows;
+            for (let deltaCol = minCol; deltaCol <= maxCol; deltaCol += 1) {
+                const nx = deltaCol / radiusCols;
+                if (nx * nx + ny * ny > 1.0201) continue;
+                visit(centerCol + deltaCol, centerRow + deltaRow, nx, ny);
+            }
+        }
+    }
+
+    /**
+     * A direção de mundo que atravessa uma célula da tela.
+     *
+     * O caminho inverso da projeção, e é o que transforma um clique num raio:
+     * seleção, arrasto no plano do chão e qualquer futura mira usam este mesmo
+     * raio contra os mesmos corpos que fazem sombra e reflexo. Derivar do mesmo
+     * `focal` que projetou é o que garante que o objeto atingido seja o objeto
+     * sob o cursor.
+     *
+     * A direção não sai normalizada de graça, então normaliza aqui: o traçado
+     * mede distância em unidades do parâmetro e conta com raio unitário.
+     */
+    rayThrough(col: number, row: number, out: Vec3): Vec3 {
+        const ndcX = (col / this.colCount) * 2 - 1;
+        const ndcY = 1 - (row / this.rowCount) * 2;
+
+        mat4.transformDirectionTransposed(
+            out,
+            this.camera.view,
+            ndcX / this.focalX,
+            ndcY / this.focalY,
+            -1,
+        );
+
+        const length = Math.hypot(out.x, out.y, out.z);
+        if (length > 0) {
+            out.x /= length;
+            out.y /= length;
+            out.z /= length;
+        }
+        return out;
+    }
+
+    /** Última fileira da janela. O recorte padrão de `disc`. */
+    get lastRow(): number {
+        return this.rowCount - 1;
+    }
+
+    /**
      * Fileira onde o horizonte cruza a tela.
      *
      * O horizonte é exatamente horizontal e não depende do azimute: rotacionar
@@ -256,12 +441,20 @@ export class Rasterizer {
     }
 
     /** Escreve uma célula por coordenada direta, para formas em espaço de tela. */
-    plotCell(col: number, row: number, glyph: number, color: number, depth: number, alpha = 255): void {
-        this.framebuffer.plot(col, row, glyph, color, depth, alpha);
+    plotCell(
+        col: number,
+        row: number,
+        glyph: number,
+        color: Rgb,
+        depth: number,
+        alpha = 1,
+        emissive = 0,
+    ): void {
+        this.framebuffer.plot(col, row, glyph, color, depth, alpha, emissive);
     }
 
     /** Escreve uma célula já projetada. Estrelas e o sol usam este caminho. */
-    plot(projected: Projected, glyph: number, color: number, alpha = 255): void {
+    plot(projected: Projected, glyph: number, color: Rgb, alpha = 1, emissive = 0): void {
         this.framebuffer.plot(
             Math.round(projected.col),
             Math.round(projected.row),
@@ -269,6 +462,7 @@ export class Rasterizer {
             color,
             projected.depth,
             alpha,
+            emissive,
         );
     }
 }

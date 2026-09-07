@@ -1,8 +1,23 @@
 import { degreesToRadians, settings } from '../config';
+import { copyRgb } from '../math/color';
+import { copy } from '../math/vec3';
+import { LIGHT } from '../light/types';
 import { GLYPH, SUN_SHADES } from '../render/palette';
 import { createProjected } from '../render/rasterizer';
-import { CELL_ASPECT } from '../render/viewport';
 import type { RenderContext, Renderable } from './scene';
+
+/**
+ * Abaixo de que elevação o sol para de iluminar, e em quanto tempo.
+ *
+ * O disco continua visível recortado no horizonte depois disso — é a estética
+ * outrun — mas um sol enterrado que ainda projetasse sombras longas denunciaria
+ * que o disco e a luz são a mesma coisa só por coincidência.
+ */
+const SET_BELOW = -0.05;
+const SET_SPAN = 0.28;
+
+/** Quanto o topo do disco passa de 1. É o que o bloom transforma em halo. */
+const SUN_EMISSIVE = 0.85;
 
 /**
  * As fatias horizontais do sol — a assinatura visual do estilo outrun.
@@ -68,7 +83,38 @@ export class Sun implements Renderable {
     private readonly center = createProjected();
     private readonly direction = { x: 0, y: 0, z: -1 };
 
-    render({ camera, rasterizer, viewport }: RenderContext): void {
+    /**
+     * O sol se declara duas vezes, e de propósito.
+     *
+     * Como luz direcional ele produz difuso e sombra; como disco no modelo de
+     * céu ele é o que um raio de reflexão encontra. São a mesma direção,
+     * preenchida aqui, no mesmo lugar — separá-las deixaria o reflexo do sol na
+     * grade apontando para onde o sol não está.
+     */
+    contribute({ lights }: RenderContext): void {
+        sunDirection(this.direction);
+
+        // `direction.y` é o seno da elevação: a direção é unitária.
+        const above = Math.max(0, Math.min(1, (this.direction.y - SET_BELOW) / SET_SPAN));
+        const tone = SUN_SHADES[0]!;
+
+        const light = lights.addLight();
+        light.kind = LIGHT.DIRECTIONAL;
+        copy(light.direction, this.direction);
+        copyRgb(light.color, tone);
+        light.intensity = settings.sunLightIntensity * above;
+        light.range = Infinity;
+        light.castsShadow = true;
+
+        const { sky } = lights;
+        copy(sky.sunDirection, this.direction);
+        copyRgb(sky.sunColor, tone);
+        sky.sunRadius = degreesToRadians(settings.sunAngularSize);
+        sky.sunIntensity = above;
+        sky.intensity = settings.skyReflectionIntensity;
+    }
+
+    render({ camera, rasterizer }: RenderContext): void {
         sunDirection(this.direction);
         const { x: dirX, y: dirY, z: dirZ } = this.direction;
 
@@ -77,13 +123,7 @@ export class Sun implements Renderable {
         const radiusRows = rasterizer.angularRadiusRows(degreesToRadians(settings.sunAngularSize));
         if (radiusRows < 1) return;
 
-        // A célula é 1:2, então o raio em colunas é o dobro — é isso que faz o
-        // disco sair redondo em vez de ovalado.
-        const radiusCols = radiusRows * CELL_ASPECT;
         const sunRowCount = radiusRows * 2 + 1.5;
-
-        const centerCol = Math.round(this.center.col);
-        const centerRow = Math.round(this.center.row);
 
         // O sol está no infinito e o chão é opaco: nada dele aparece abaixo do
         // horizonte. Como o chão é desenhado só em linhas, sem este recorte ele
@@ -92,33 +132,29 @@ export class Sun implements Renderable {
         const lastVisibleRow =
             camera.position.y > 0
                 ? Math.round(rasterizer.horizonRow()) - 1
-                : viewport.rowCount - 1;
+                : rasterizer.lastRow;
 
-        // Recorta o laço na tela: um sol fora de vista não deve custar o disco inteiro.
-        const minRow = Math.max(-Math.ceil(radiusRows), -centerRow);
-        const maxRow = Math.min(Math.ceil(radiusRows), lastVisibleRow - centerRow);
-        const minCol = Math.max(-Math.ceil(radiusCols), -centerCol);
-        const maxCol = Math.min(Math.ceil(radiusCols), viewport.colCount - 1 - centerCol);
+        rasterizer.disc(this.center, radiusRows, lastVisibleRow, (col, row, _nx, ny) => {
+            const localRow = ny * radiusRows + radiusRows;
+            if (isSunSliceGap(localRow, sunRowCount)) return;
 
-        for (let deltaRow = minRow; deltaRow <= maxRow; deltaRow += 1) {
-            const localRow = deltaRow + radiusRows;
-
-            if (isSunSliceGap(localRow, sunRowCount)) continue;
-
+            const progress = localRow / sunRowCount;
             const shadeIndex = Math.min(
                 SUN_SHADES.length - 1,
-                Math.floor((localRow / sunRowCount) * SUN_SHADES.length),
+                Math.floor(progress * SUN_SHADES.length),
             );
-            const color = SUN_SHADES[shadeIndex] ?? SUN_SHADES[0]!;
-            const glyph = pickSunGlyph(localRow, sunRowCount);
-            const normalizedY = deltaRow / radiusRows;
 
-            for (let deltaCol = minCol; deltaCol <= maxCol; deltaCol += 1) {
-                const normalizedX = deltaCol / radiusCols;
-                if (Math.hypot(normalizedX, normalizedY) > 1.01) continue;
-
-                rasterizer.plotCell(centerCol + deltaCol, centerRow + deltaRow, glyph, color, Infinity);
-            }
-        }
+            // O topo estoura mais que a base: é o que dá ao disco o núcleo
+            // branco de sol contra o céu, sem clarear a paleta inteira.
+            rasterizer.plotCell(
+                col, row,
+                pickSunGlyph(localRow, sunRowCount),
+                SUN_SHADES[shadeIndex] ?? SUN_SHADES[0]!,
+                Infinity,
+                1,
+                SUN_EMISSIVE * (1 - progress),
+            );
+        });
     }
+
 }

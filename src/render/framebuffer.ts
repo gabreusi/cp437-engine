@@ -1,13 +1,23 @@
+import type { Rgb } from '../math/color';
+
 /**
- * Grade de células no formato que a GPU consome direto.
+ * Grade de células em dois planos, no formato que a GPU consome direto.
  *
- * `data` já está no layout RGBA8 da data texture, então o quadro vai para a GPU
- * sem passo de empacotamento: um `texSubImage2D` do array inteiro.
+ * Nenhum dos dois precisa de passo de empacotamento: cada um vai para a sua
+ * data texture com um `texSubImage2D` do array inteiro.
  *
- *   R = índice do glifo no atlas
- *   G = índice da cor na paleta
- *   B = alpha da célula (é por onde a névoa entra)
- *   A = 255, reservado
+ *   cells    R = índice do glifo no atlas
+ *            G = alpha da célula (é por onde a névoa entra)
+ *            B = brilho emissivo, o que passa de 1.0 e estoura no bloom
+ *            A = 255, reservado
+ *
+ *   colors   R, G, B = cor da célula
+ *            A = não usado
+ *
+ * São dois planos e não um porque a célula precisa de cinco bytes: quatro para
+ * glifo, alpha e emissivo, mais três de cor. A versão anterior cabia em um só
+ * guardando um índice de paleta no lugar da cor, e foi exatamente isso que
+ * impediu luz colorida. ~172 KB por quadro a 180x120, contra 86 KB antes.
  *
  * O `!` nos acessos aos arrays é seguro: todo caminho até eles passa pela
  * checagem de limites de `plot`.
@@ -25,8 +35,21 @@
  */
 const DEPTH_TOLERANCE = 1e-3;
 
+/**
+ * Teto do canal emissivo.
+ *
+ * O byte guarda 0..1 do intervalo; o shader multiplica de volta. Quatro é o
+ * bastante para o núcleo do sol dominar o bloom sem que a quantização apareça
+ * como degrau nas bordas.
+ */
+export const EMISSIVE_RANGE = 4;
+
+const toByte = (value: number): number =>
+    value <= 0 ? 0 : value >= 1 ? 255 : (value * 255 + 0.5) | 0;
+
 export class Framebuffer {
-    readonly data: Uint8Array;
+    readonly cells: Uint8Array;
+    readonly colors: Uint8Array;
     private readonly depth: Float32Array;
 
     constructor(
@@ -34,14 +57,16 @@ export class Framebuffer {
         readonly rowCount: number,
     ) {
         const cells = colCount * rowCount;
-        this.data = new Uint8Array(cells * 4);
+        this.cells = new Uint8Array(cells * 4);
+        this.colors = new Uint8Array(cells * 4);
         this.depth = new Float32Array(cells);
         this.clear();
     }
 
-    /** Zerar já significa "célula vazia": o glifo 0 é o espaço em branco. */
+    /** Zerar já significa "célula vazia": alpha zero é descartado no shader. */
     clear(): void {
-        this.data.fill(0);
+        this.cells.fill(0);
+        this.colors.fill(0);
         this.depth.fill(Infinity);
     }
 
@@ -56,9 +81,10 @@ export class Framebuffer {
         col: number,
         row: number,
         glyph: number,
-        color: number,
+        color: Rgb,
         depth: number,
-        alpha = 255,
+        alpha = 1,
+        emissive = 0,
     ): void {
         if (col < 0 || col >= this.colCount || row < 0 || row >= this.rowCount) return;
 
@@ -66,15 +92,17 @@ export class Framebuffer {
         const current = this.depth[index]!;
         if (depth > current + Math.abs(current) * DEPTH_TOLERANCE) return;
 
-        this.write(index, glyph, color, depth, alpha);
-    }
-
-    private write(index: number, glyph: number, color: number, depth: number, alpha: number): void {
         this.depth[index] = depth;
+
         const offset = index * 4;
-        this.data[offset] = glyph;
-        this.data[offset + 1] = color;
-        this.data[offset + 2] = alpha;
-        this.data[offset + 3] = 255;
+        this.cells[offset] = glyph;
+        this.cells[offset + 1] = toByte(alpha);
+        this.cells[offset + 2] = toByte(emissive / EMISSIVE_RANGE);
+        this.cells[offset + 3] = 255;
+
+        this.colors[offset] = toByte(color.r);
+        this.colors[offset + 1] = toByte(color.g);
+        this.colors[offset + 2] = toByte(color.b);
+        this.colors[offset + 3] = 255;
     }
 }

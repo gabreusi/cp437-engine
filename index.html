@@ -3,8 +3,8 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Gerador de wallpaper outrun em ASCII animado.">
-    <title>Outrun ASCII</title>
+    <meta name="description" content="Engine 3D que rasteriza para caracteres, com luz colorida, sombras e reflexos.">
+    <title>CP437 Engine</title>
 </head>
 <body>
 
@@ -14,26 +14,6 @@
 </div>
 
 <div id="hud" role="status"></div>
-
-<button id="handle" class="handle" type="button" title="Configurações" aria-label="Abrir configurações">⚙</button>
-
-<!-- Os controles são gerados por src/ui/panel.ts a partir de src/config.ts. -->
-<div id="ui-wrapper">
-    <div id="panel-content" class="panel-content"></div>
-</div>
-
-<div id="export-modal">
-    <div id="crop-container">
-        <img id="crop-image" src="" alt="Base para recorte">
-    </div>
-    <div class="modal-controls">
-        <input type="number" id="export-width" placeholder="Largura (px)" min="1">
-        <input type="number" id="export-height" placeholder="Altura (px)" min="1">
-        <button id="btn-download" type="button">Baixar Wallpaper</button>
-        <button id="btn-cancel" type="button">Cancelar</button>
-    </div>
-</div>
-
 <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

@@ -1,4 +1,5 @@
 import { settings } from '../config';
+import type { Rgb } from '../math/color';
 import { hashNoise } from '../math/noise';
 import { COLOR, GLYPH, STAR_TINTS } from '../render/palette';
 import { createProjected } from '../render/rasterizer';
@@ -36,7 +37,7 @@ interface Star {
     y: number;
     z: number;
     glyph: number;
-    color: number;
+    color: Rgb;
     twinkles: boolean;
     phaseOffset: number;
     speed: number;

@@ -58,14 +58,21 @@ export class BloomPass {
     private readonly quarter: RenderTarget;
     private readonly quarterPing: RenderTarget;
 
-    constructor(private readonly gl: WebGL2RenderingContext, width: number, height: number) {
+    constructor(
+        private readonly gl: WebGL2RenderingContext,
+        width: number,
+        height: number,
+        hdr = false,
+    ) {
         this.blit = new Program(gl, FULLSCREEN_VERTEX, BLIT_SOURCE);
         this.blur = new Program(gl, FULLSCREEN_VERTEX, BLUR_SOURCE);
 
-        this.half = new RenderTarget(gl, width / 2, height / 2);
-        this.halfPing = new RenderTarget(gl, width / 2, height / 2);
-        this.quarter = new RenderTarget(gl, width / 4, height / 4);
-        this.quarterPing = new RenderTarget(gl, width / 4, height / 4);
+        // Os alvos do bloom acompanham a precisão da cena: cortar em 1 aqui
+        // desfaria o estouro que a cena acabou de produzir.
+        this.half = new RenderTarget(gl, width / 2, height / 2, hdr);
+        this.halfPing = new RenderTarget(gl, width / 2, height / 2, hdr);
+        this.quarter = new RenderTarget(gl, width / 4, height / 4, hdr);
+        this.quarterPing = new RenderTarget(gl, width / 4, height / 4, hdr);
 
         this.blit.use();
         this.blit.setTextureUnit('uSource', 0);

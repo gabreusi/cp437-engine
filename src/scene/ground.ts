@@ -1,5 +1,5 @@
 import { settings } from '../config';
-import { groundStyle } from '../render/shading';
+import { createGroundPen } from '../render/shading';
 import type { RenderContext, Renderable } from './scene';
 
 /**
@@ -10,9 +10,18 @@ import type { RenderContext, Renderable } from './scene';
  * o mundo não acaba por mais longe que se voe. É a generalização em duas
  * dimensões do `distance % lineSpacingWorld` que a animação original usava para
  * fazer as linhas correrem sem acumular erro de ponto flutuante.
+ *
+ * É também a maior superfície da cena, e a única que cobre metade da tela:
+ * quase todo o custo de iluminação está aqui, e é por isso que o estilo do chão
+ * corta névoa antes de qualquer conta de luz.
  */
 export class Ground implements Renderable {
-    render({ camera, rasterizer }: RenderContext): void {
+    private readonly pen = createGroundPen();
+
+    render(context: RenderContext): void {
+        const { camera, rasterizer } = context;
+        this.pen.begin(context);
+
         const spacing = Math.max(0.1, settings.gridSize);
         const reach = settings.viewDistance;
 
@@ -27,11 +36,11 @@ export class Ground implements Renderable {
 
             // Paralelas a X.
             const z = baseZ + offset;
-            rasterizer.line(baseX - reach, 0, z, baseX + reach, 0, z, groundStyle);
+            rasterizer.line(baseX - reach, 0, z, baseX + reach, 0, z, this.pen.style);
 
             // Paralelas a Z.
             const x = baseX + offset;
-            rasterizer.line(x, 0, baseZ - reach, x, 0, baseZ + reach, groundStyle);
+            rasterizer.line(x, 0, baseZ - reach, x, 0, baseZ + reach, this.pen.style);
         }
     }
 }
