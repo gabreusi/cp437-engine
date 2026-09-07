@@ -47,23 +47,12 @@ interface CellBox {
 
 type GlyphPainter = (ctx: CanvasRenderingContext2D, box: CellBox) => void;
 
-/** Matriz de Bayer 4x4, para os sombreados saírem regulares e emendáveis. */
-const BAYER_4X4 = [
-    0, 8, 2, 10,
-    12, 4, 14, 6,
-    3, 11, 1, 9,
-    15, 7, 13, 5,
-];
-
 /**
  * Retângulo em coordenadas fracionárias da célula.
  *
  * As duas bordas são arredondadas, em vez de arredondar o tamanho: com célula
  * de largura ímpar, `ceil` de meia largura estoura meio pixel para dentro da
- * célula vizinha, e o vazamento aparece como um traço fantasma no glifo do
- * lado. Arredondando as bordas, sub-retângulos adjacentes continuam emendando
- * — a borda direita de um é o mesmo número da borda esquerda do outro — e nada
- * ultrapassa a célula.
+ * célula vizinha, e o vazamento aparece como traço fantasma no glifo do lado.
  */
 const spanRect = (
     ctx: CanvasRenderingContext2D,
@@ -80,59 +69,19 @@ const spanRect = (
     ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 };
 
-/** Preenche sub-blocos conforme a densidade, num padrão que casa entre células. */
-const dither = (density: number): GlyphPainter => (ctx, box) => {
-    const threshold = density * 16;
-
-    for (let index = 0; index < 16; index += 1) {
-        if ((BAYER_4X4[index] ?? 16) >= threshold) continue;
-        spanRect(ctx, box, (index % 4) / 4, Math.floor(index / 4) / 4, 1 / 4, 1 / 4);
-    }
-};
-
-const rect = (fx: number, fy: number, fw: number, fh: number): GlyphPainter => (ctx, box) => {
-    spanRect(ctx, box, fx, fy, fw, fh);
-};
-
-const compose = (...painters: GlyphPainter[]): GlyphPainter => (ctx, box) => {
-    for (const painter of painters) painter(ctx, box);
-};
-
 /**
  * Glifos desenhados à mão, não tirados da fonte.
  *
- * A fonte desenha numa caixa de proporção própria (~1:1,67) enquanto a célula é
- * 1:2, então um bloco da fonte deixaria fresta entre células vizinhas. Desenhar
- * em retângulos garante que preencham a célula exata, o que é o que faz os
- * quadrantes emendarem com o bloco cheio na silhueta do sol.
+ * Só a linha do horizonte. A fonte desenha numa caixa de proporção própria
+ * (~1:1,67) enquanto a célula é 1:2, então o `_` para antes da base e sobra
+ * uma fresta de céu entre a linha e a bruma rasteira.
  */
 const PAINTERS: Record<string, GlyphPainter> = {
-    '█': rect(0, 0, 1, 1),
-    '▓': dither(0.75),
-    '▒': dither(0.5),
-    '░': dither(0.25),
-
-    '▘': rect(0, 0, 0.5, 0.5),
-    '▝': rect(0.5, 0, 0.5, 0.5),
-    '▖': rect(0, 0.5, 0.5, 0.5),
-    '▗': rect(0.5, 0.5, 0.5, 0.5),
-    '▀': rect(0, 0, 1, 0.5),
-    '▄': rect(0, 0.5, 1, 0.5),
-    '▌': rect(0, 0, 0.5, 1),
-    '▐': rect(0.5, 0, 0.5, 1),
     // Espessura semelhante à do `_` da fonte, mas colado na base da célula.
     '▁': (ctx, box) => {
         const thickness = Math.max(1, Math.round(box.w * 0.14));
         spanRect(ctx, box, 0, 1 - thickness / box.h, 1, thickness / box.h);
     },
-
-    '▚': compose(rect(0, 0, 0.5, 0.5), rect(0.5, 0.5, 0.5, 0.5)),
-    '▞': compose(rect(0.5, 0, 0.5, 0.5), rect(0, 0.5, 0.5, 0.5)),
-    '▛': compose(rect(0, 0, 1, 0.5), rect(0, 0.5, 0.5, 0.5)),
-    '▜': compose(rect(0, 0, 1, 0.5), rect(0.5, 0.5, 0.5, 0.5)),
-    '▙': compose(rect(0, 0, 0.5, 0.5), rect(0, 0.5, 1, 0.5)),
-    '▟': compose(rect(0.5, 0, 0.5, 0.5), rect(0, 0.5, 1, 0.5)),
-
 };
 
 /**

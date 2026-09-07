@@ -1,5 +1,5 @@
 import { degreesToRadians, settings } from '../config';
-import { GLYPH, QUADRANT_BY_MASK, SUN_SHADES } from '../render/palette';
+import { GLYPH, SUN_SHADES } from '../render/palette';
 import { createProjected } from '../render/rasterizer';
 import { CELL_ASPECT } from '../render/viewport';
 import type { RenderContext, Renderable } from './scene';
@@ -110,23 +110,13 @@ export class Sun implements Renderable {
                 Math.floor((localRow / sunRowCount) * SUN_SHADES.length),
             );
             const color = SUN_SHADES[shadeIndex] ?? SUN_SHADES[0]!;
-            const solidGlyph = pickSunGlyph(localRow, sunRowCount);
+            const glyph = pickSunGlyph(localRow, sunRowCount);
+            const normalizedY = deltaRow / radiusRows;
 
             for (let deltaCol = minCol; deltaCol <= maxCol; deltaCol += 1) {
-                // Amostra quatro sub-células em vez do centro: a borda do disco
-                // passa a ser representada no dobro da resolução nos dois eixos,
-                // o que tira os degraus duros da silhueta.
-                let mask = 0;
-                for (let sub = 0; sub < 4; sub += 1) {
-                    const offsetX = (sub & 1) === 0 ? -0.25 : 0.25;
-                    const offsetY = sub < 2 ? -0.25 : 0.25;
-                    const nx = (deltaCol + offsetX) / radiusCols;
-                    const ny = (deltaRow + offsetY) / radiusRows;
-                    if (nx * nx + ny * ny <= 1) mask |= 1 << sub;
-                }
-                if (mask === 0) continue;
+                const normalizedX = deltaCol / radiusCols;
+                if (Math.hypot(normalizedX, normalizedY) > 1.01) continue;
 
-                const glyph = mask === 0b1111 ? solidGlyph : (QUADRANT_BY_MASK[mask] ?? solidGlyph);
                 rasterizer.plotCell(centerCol + deltaCol, centerRow + deltaRow, glyph, color, Infinity);
             }
         }

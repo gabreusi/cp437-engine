@@ -9,11 +9,10 @@
 /**
  * Índice no charset é o que vai para a data texture; a ordem importa.
  *
- * Duas famílias: os caracteres de texto, que vêm da fonte, e os blocos, que
- * cobrem os 16 padrões possíveis de uma amostragem 2x2 e são desenhados
- * proceduralmente no atlas — ver `atlas.ts` para o porquê.
+ * Tudo vem da fonte, menos a linha do horizonte, que é desenhada por nós
+ * porque a bruma rasteira precisa começar exatamente onde ela termina.
  */
-export const CHARSET = ' ·•+*█▓▒░-_|/\\' + '▘▝▖▗▀▄▌▐▚▞▛▜▙▟' + '▁';
+export const CHARSET = ' ·•+*█▓▒░-_|/\\' + '▁';
 
 export const GLYPH = {
     BLANK: 0,
@@ -31,21 +30,6 @@ export const GLYPH = {
     SLASH: 12,
     BACKSLASH: 13,
 
-    QUAD_TL: 14,
-    QUAD_TR: 15,
-    QUAD_BL: 16,
-    QUAD_BR: 17,
-    HALF_TOP: 18,
-    HALF_BOTTOM: 19,
-    HALF_LEFT: 20,
-    HALF_RIGHT: 21,
-    QUAD_TL_BR: 22,
-    QUAD_TR_BL: 23,
-    QUAD_NO_BR: 24,
-    QUAD_NO_BL: 25,
-    QUAD_NO_TR: 26,
-    QUAD_NO_TL: 27,
-
     /**
      * Traço rente à base da célula, para a linha do horizonte.
      *
@@ -53,33 +37,8 @@ export const GLYPH = {
      * precisa começar exatamente onde a linha termina. Com um glifo desenhado
      * por nós, a posição é conhecida em vez de herdada da métrica da fonte.
      */
-    GROUND_LINE: 28,
+    GROUND_LINE: 14,
 } as const;
-
-/**
- * Padrão de cobertura 2x2 para glifo, indexado por máscara de bits:
- * 1 = superior esquerdo, 2 = superior direito, 4 = inferior esquerdo,
- * 8 = inferior direito. Os 16 casos existem, então a borda de qualquer forma
- * pode ser representada exatamente no dobro da resolução da célula.
- */
-export const QUADRANT_BY_MASK: readonly number[] = [
-    GLYPH.BLANK,        // 0000
-    GLYPH.QUAD_TL,      // 0001
-    GLYPH.QUAD_TR,      // 0010
-    GLYPH.HALF_TOP,     // 0011
-    GLYPH.QUAD_BL,      // 0100
-    GLYPH.HALF_LEFT,    // 0101
-    GLYPH.QUAD_TR_BL,   // 0110
-    GLYPH.QUAD_NO_BR,   // 0111
-    GLYPH.QUAD_BR,      // 1000
-    GLYPH.QUAD_TL_BR,   // 1001
-    GLYPH.HALF_RIGHT,   // 1010
-    GLYPH.QUAD_NO_BL,   // 1011
-    GLYPH.HALF_BOTTOM,  // 1100
-    GLYPH.QUAD_NO_TR,   // 1101
-    GLYPH.QUAD_NO_TL,   // 1110
-    GLYPH.BLOCK_FULL,   // 1111
-];
 
 /**
  * Índice 0 é reservado para "célula vazia", então limpar o buffer com zeros já
