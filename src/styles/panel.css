@@ -1,0 +1,120 @@
+/* Painel fora da tela; a classe .open o traz para dentro. */
+#ui-wrapper {
+    position: fixed;
+    right: -322px;
+    bottom: 10px;
+    width: 320px;
+    height: auto;
+    max-height: 100%;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    color: #fff;
+    border: 1px solid var(--neon-cyan);
+    backdrop-filter: blur(5px);
+    transition: right .3s cubic-bezier(.4, 0, .2, 1);
+}
+
+#ui-wrapper.open {
+    right: 10px;
+    box-shadow: 0 0 15px var(--neon-cyan-far);
+}
+
+.handle {
+    position: fixed;
+    padding: 0;
+    font-family: inherit;
+    background: transparent;
+    right: 10px;
+    bottom: 10px;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    color: var(--neon-cyan);
+    cursor: pointer;
+    border: 1px solid var(--neon-cyan-far);
+    border-radius: 8px;
+    backdrop-filter: blur(55px);
+    box-shadow: 5px 0 10px rgba(46, 242, 255, .2);
+}
+
+.panel-content {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    max-height: 100%;
+    overflow-y: auto;
+    box-sizing: border-box;
+}
+
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.control-group label {
+    font-size: 13px;
+    font-weight: bold;
+    color: var(--neon-cyan);
+}
+
+.switch-group {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: bold;
+    color: var(--neon-cyan);
+}
+
+input[type="range"] {
+    accent-color: var(--neon-pink);
+    cursor: pointer;
+}
+
+input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--neon-pink);
+    cursor: pointer;
+}
+
+.panel-content button,
+.modal-controls button {
+    margin-top: 5px;
+    padding: 10px;
+    font-family: inherit;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: var(--neon-pink);
+    background: transparent;
+    border: 2px solid var(--neon-pink);
+    cursor: pointer;
+    transition: all .2s;
+}
+
+.panel-content button:hover,
+.modal-controls button:hover {
+    color: var(--void);
+    background: var(--neon-pink);
+    box-shadow: 0 0 10px var(--neon-pink);
+}
+
+/* Ação secundária: ciano preenchido, para não competir com "Exportar". */
+#btn-close-wrapper {
+    color: var(--void);
+    background: var(--neon-cyan);
+    border-color: var(--neon-cyan);
+}
+
+#btn-close-wrapper:hover {
+    color: var(--void);
+    background: var(--neon-cyan-deep);
+    border-color: var(--neon-cyan-deep);
+    box-shadow: 0 0 10px var(--neon-cyan-deep);
+}

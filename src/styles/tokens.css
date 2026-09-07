@@ -1,0 +1,10 @@
+:root {
+    --void: #05000e;
+    --neon-cyan: #2ef2ff;
+    --neon-cyan-deep: #109fbe;
+    --neon-cyan-far: #0a5a72;
+    --horizon-glow: #a6f7ff;
+    --neon-pink: #ff3cbe;
+
+    --mono: "Courier New", Consolas, "DejaVu Sans Mono", monospace;
+}

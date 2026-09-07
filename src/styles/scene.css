@@ -1,0 +1,90 @@
+#stage {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Substituído em tempo real por buildStageGradient(); este é o estado inicial. */
+    background:
+        radial-gradient(52% 30% at 50% 44%, rgba(255, 60, 190, .34), rgba(255, 60, 190, 0) 72%),
+        radial-gradient(95% 18% at 50% 51%, rgba(0, 226, 255, .20), rgba(0, 226, 255, 0) 78%),
+        radial-gradient(130% 85% at 50% 26%, rgba(74, 6, 104, .60), rgba(5, 0, 14, 0) 68%);
+}
+
+/* !important porque o gradiente é aplicado inline pelo JS. */
+#stage.no-bg {
+    background: var(--void) !important;
+}
+
+/* Scanlines de CRT e vinheta. */
+#stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+        repeating-linear-gradient(rgba(0, 0, 0, 0) 0 2px, rgba(0, 0, 0, .20) 2px 5px),
+        radial-gradient(120% 100% at 50% 50%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, .55) 100%);
+}
+
+#scene,
+#probe {
+    margin: 0;
+    padding: 0;
+    font: 400 clamp(9px, 1.7vh, 17px)/1.1 var(--mono);
+    white-space: pre;
+    letter-spacing: 0;
+}
+
+#scene {
+    position: relative;
+    color: #d8e6ff;
+    text-shadow: 0 0 .32em currentColor, 0 0 .9em currentColor;
+}
+
+#stage.no-glow #scene,
+#stage.no-glow span {
+    text-shadow: none !important;
+}
+
+/*
+ * Régua fora da tela usada para medir uma célula da fonte monoespaçada.
+ * Precisa herdar exatamente a tipografia de #scene — daí o seletor conjunto acima.
+ */
+#probe {
+    position: fixed;
+    top: -200px;
+    left: -400px;
+    visibility: hidden;
+}
+
+/* Sol: amarelo no topo, magenta na base. */
+.y0, .y1, .y2, .y3, .y4, .y5, .y6, .y7 {
+    text-shadow: 0 0 .3em currentColor, 0 0 .85em currentColor, 0 0 2em rgba(255, 70, 190, .45);
+}
+
+.y0 { color: #ffd54a; }
+.y1 { color: #ffb93c; }
+.y2 { color: #ff9a41; }
+.y3 { color: #ff7c55; }
+.y4 { color: #ff6379; }
+.y5 { color: #ff5199; }
+.y6 { color: #fb46bd; }
+.y7 { color: #f24ad6; }
+
+/* Estrelas. */
+.k0 { color: #cfe0ff; }
+.k1 { color: #7df3ff; }
+.k2 { color: #ff9ad5; }
+.k3 { color: #a6ff9c; }
+
+/* Linha do horizonte. */
+.hz {
+    color: var(--horizon-glow);
+    text-shadow: 0 0 .3em currentColor, 0 0 .9em currentColor, 0 0 2.2em var(--neon-cyan);
+}
+
+/* Chão, do mais perto (c0) ao mais distante (c2). */
+.c0 { color: var(--neon-cyan); }
+.c1 { color: var(--neon-cyan-deep); }
+.c2 { color: var(--neon-cyan-far); }
