@@ -2,7 +2,6 @@ node_modules/
 dist/
 *.local
 .DS_Store
-index.legado.html
 
 # Config local de editor/ferramenta (específica desta máquina)
 .idea/
