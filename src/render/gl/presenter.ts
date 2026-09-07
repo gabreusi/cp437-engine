@@ -125,7 +125,9 @@ export class GlPresenter implements Presenter {
         // 1. Céu e grid, fora da tela, para o bloom ter o que amostrar.
         resources.scene.bind();
         gl.disable(gl.BLEND);
-        resources.background.draw(atmosphere, viewport.pixelWidth, viewport.pixelHeight);
+        resources.background.draw(
+            atmosphere, viewport.pixelWidth, viewport.pixelHeight, settings.groundHaze,
+        );
 
         gl.enable(gl.BLEND);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -176,7 +178,7 @@ export class GlPresenter implements Presenter {
         try {
             resources.scene.bind();
             gl.disable(gl.BLEND);
-            resources.background.draw(atmosphere, width, height);
+            resources.background.draw(atmosphere, width, height, settings.groundHaze);
 
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);

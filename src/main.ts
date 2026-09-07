@@ -35,7 +35,7 @@ scene.add(new Sun());
 scene.add(new Ground());
 
 // Reaproveitados a cada quadro; o gradiente de fundo segue o sol de verdade.
-const atmosphere = { sunU: 0.5, sunV: 0.5, horizonV: 0.5 };
+const atmosphere = { sunU: 0.5, sunV: 0.5, horizonV: 0.5, hazeScale: 0 };
 const sunDir = { x: 0, y: 0, z: -1 };
 const sunScreen = createProjected();
 
@@ -60,6 +60,15 @@ const update = (deltaSeconds: number): void => {
 /** Converte sol e horizonte para UV, com y para cima, como o shader espera. */
 const updateAtmosphere = (currentViewport: Viewport): void => {
     atmosphere.horizonV = 1 - rasterizer.horizonRow() / currentViewport.rowCount;
+
+    // Mesma névoa que apaga a grade, resolvida para a distância do chão em cada
+    // fileira: `distância ≈ altura * focal / (2 * abaixoDoHorizonte)`. Tudo o
+    // que não depende da fileira cabe nesta constante.
+    const focalY = 1 / Math.tan(camera.fov / 2);
+    const height = Math.max(0, camera.position.y);
+    atmosphere.hazeScale = settings.fogEnabled
+        ? (height * focalY * settings.fogDensity * 1.6) / (2 * settings.viewDistance)
+        : 0;
 
     sunDirection(sunDir);
     if (rasterizer.projectDirection(sunDir.x, sunDir.y, sunDir.z, sunScreen)) {

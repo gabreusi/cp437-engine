@@ -35,6 +35,7 @@ const SLIDERS: readonly SliderSpec[] = [
     { key: 'gridSize', label: 'Grade (unidades)', min: 1, max: 16, step: 0.5, digits: 1 },
     { key: 'viewDistance', label: 'Alcance', min: 60, max: 400, step: 10 },
     { key: 'fogDensity', label: 'Névoa', min: 0, max: 2.5, step: 0.05, digits: 2 },
+    { key: 'groundHaze', label: 'Bruma do chão', min: 0, max: 1.5, step: 0.05, digits: 2 },
 
     { key: 'sunElevation', label: 'Elevação do sol', min: -20, max: 40, step: 0.5, digits: 1, suffix: '°' },
     { key: 'sunAzimuth', label: 'Azimute do sol', min: -180, max: 180, step: 1, suffix: '°' },

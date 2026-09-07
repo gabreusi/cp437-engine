@@ -19,6 +19,11 @@ export interface Settings {
 
     fogDensity: number;
     fogEnabled: boolean;
+    /**
+     * Bruma rasteira abaixo do horizonte, onde a névoa já apagou a grade.
+     * É o que impede o vão entre a última linha e o horizonte de ler como céu.
+     */
+    groundHaze: number;
 
     /** Graus acima do horizonte. Negativo afunda o sol. */
     sunElevation: number;
@@ -45,6 +50,7 @@ export const settings: Settings = {
 
     fogDensity: 1,
     fogEnabled: true,
+    groundHaze: 0.45,
 
     sunElevation: 4,
     sunAzimuth: 0,
