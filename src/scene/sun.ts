@@ -1,5 +1,5 @@
 import { degreesToRadians, settings } from '../config';
-import { GLYPH, SUN_SHADES } from '../render/palette';
+import { GLYPH, QUADRANT_BY_MASK, SUN_SHADES, verticalCoverageGlyph } from '../render/palette';
 import { createProjected } from '../render/rasterizer';
 import { CELL_ASPECT } from '../render/viewport';
 import type { RenderContext, Renderable } from './scene';
@@ -68,7 +68,7 @@ export class Sun implements Renderable {
     private readonly center = createProjected();
     private readonly direction = { x: 0, y: 0, z: -1 };
 
-    render({ rasterizer, viewport }: RenderContext): void {
+    render({ camera, rasterizer, viewport }: RenderContext): void {
         sunDirection(this.direction);
         const { x: dirX, y: dirY, z: dirZ } = this.direction;
 
@@ -85,14 +85,22 @@ export class Sun implements Renderable {
         const centerCol = Math.round(this.center.col);
         const centerRow = Math.round(this.center.row);
 
+        // O sol está no infinito e o chão é opaco: nada dele aparece abaixo do
+        // horizonte. Como o chão é desenhado só em linhas, sem este recorte ele
+        // vaza pelos vãos. Só vale com a câmera acima do plano — abaixo dele o
+        // chão fica por cima e é o céu que ocupa a parte de baixo da tela.
+        const lastVisibleRow =
+            camera.position.y > 0
+                ? Math.round(rasterizer.horizonRow()) - 1
+                : viewport.rowCount - 1;
+
         // Recorta o laço na tela: um sol fora de vista não deve custar o disco inteiro.
         const minRow = Math.max(-Math.ceil(radiusRows), -centerRow);
-        const maxRow = Math.min(Math.ceil(radiusRows), viewport.rowCount - 1 - centerRow);
+        const maxRow = Math.min(Math.ceil(radiusRows), lastVisibleRow - centerRow);
         const minCol = Math.max(-Math.ceil(radiusCols), -centerCol);
         const maxCol = Math.min(Math.ceil(radiusCols), viewport.colCount - 1 - centerCol);
 
         for (let deltaRow = minRow; deltaRow <= maxRow; deltaRow += 1) {
-            const normalizedY = deltaRow / radiusRows;
             const localRow = deltaRow + radiusRows;
 
             if (isSunSliceGap(localRow, sunRowCount)) continue;
@@ -102,11 +110,41 @@ export class Sun implements Renderable {
                 Math.floor((localRow / sunRowCount) * SUN_SHADES.length),
             );
             const color = SUN_SHADES[shadeIndex] ?? SUN_SHADES[0]!;
-            const glyph = pickSunGlyph(localRow, sunRowCount);
+            const solidGlyph = pickSunGlyph(localRow, sunRowCount);
 
             for (let deltaCol = minCol; deltaCol <= maxCol; deltaCol += 1) {
-                const normalizedX = deltaCol / radiusCols;
-                if (Math.hypot(normalizedX, normalizedY) > 1.01) continue;
+                // Amostra quatro sub-células em vez do centro: a borda do disco
+                // passa a ser representada no dobro da resolução nos dois eixos,
+                // o que tira os degraus duros da silhueta.
+                let mask = 0;
+                for (let sub = 0; sub < 4; sub += 1) {
+                    const offsetX = (sub & 1) === 0 ? -0.25 : 0.25;
+                    const offsetY = sub < 2 ? -0.25 : 0.25;
+                    const nx = (deltaCol + offsetX) / radiusCols;
+                    const ny = (deltaRow + offsetY) / radiusRows;
+                    if (nx * nx + ny * ny <= 1) mask |= 1 << sub;
+                }
+                if (mask === 0) continue;
+
+                let glyph = mask === 0b1111 ? solidGlyph : (QUADRANT_BY_MASK[mask] ?? solidGlyph);
+
+                // No bordo superior a borda do disco é conhecida em forma
+                // fechada, então dá para medir a cobertura em vez de amostrar:
+                // oito níveis verticais em vez de dois. Só onde a borda é rasa
+                // — na lateral do disco ela é quase vertical, e ali uma fatia
+                // horizontal representaria a coisa errada.
+                const nx = deltaCol / radiusCols;
+                if (deltaRow < 0 && Math.abs(nx) < 1) {
+                    const root = Math.sqrt(1 - nx * nx);
+                    const edgeSlope = Math.abs((radiusRows * nx) / (radiusCols * root));
+
+                    if (edgeSlope <= 1) {
+                        const edgeRow = -radiusRows * root;
+                        const covered = deltaRow + 0.5 - Math.max(edgeRow, deltaRow - 0.5);
+                        if (covered <= 0) continue;
+                        if (covered < 1) glyph = verticalCoverageGlyph(covered);
+                    }
+                }
 
                 rasterizer.plotCell(centerCol + deltaCol, centerRow + deltaRow, glyph, color, Infinity);
             }

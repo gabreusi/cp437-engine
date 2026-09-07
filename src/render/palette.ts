@@ -6,8 +6,15 @@
  * por célula. Os valores são os mesmos de antes.
  */
 
-/** Índice no charset é o que vai para a data texture; a ordem importa. */
-export const CHARSET = ' ·•+*█▓▒░-_|/\\';
+/**
+ * Índice no charset é o que vai para a data texture; a ordem importa.
+ *
+ * Três famílias: os caracteres de texto, que vêm da fonte; os blocos de
+ * quadrante, que cobrem os 16 padrões possíveis de uma amostragem 2x2; e o
+ * box-drawing, em peso leve e pesado. Tudo depois do `\\` é desenhado
+ * proceduralmente no atlas — ver `atlas.ts` para o porquê.
+ */
+export const CHARSET = ' ·•+*█▓▒░-_|/\\' + '▘▝▖▗▀▄▌▐▚▞▛▜▙▟' + '─│┼╱╲╳' + '━┃╋' + '┌┐└┘' + '▁▂▃▅▆▇';
 
 export const GLYPH = {
     BLANK: 0,
@@ -24,7 +31,102 @@ export const GLYPH = {
     PIPE: 11,
     SLASH: 12,
     BACKSLASH: 13,
+
+    QUAD_TL: 14,
+    QUAD_TR: 15,
+    QUAD_BL: 16,
+    QUAD_BR: 17,
+    HALF_TOP: 18,
+    HALF_BOTTOM: 19,
+    HALF_LEFT: 20,
+    HALF_RIGHT: 21,
+    QUAD_TL_BR: 22,
+    QUAD_TR_BL: 23,
+    QUAD_NO_BR: 24,
+    QUAD_NO_BL: 25,
+    QUAD_NO_TR: 26,
+    QUAD_NO_TL: 27,
+
+    LINE_H: 28,
+    LINE_V: 29,
+    LINE_CROSS: 30,
+    LINE_UP: 31,
+    LINE_DOWN: 32,
+    LINE_X: 33,
+
+    HEAVY_H: 34,
+    HEAVY_V: 35,
+    HEAVY_CROSS: 36,
+
+    CORNER_RIGHT_DOWN: 37,
+    CORNER_LEFT_DOWN: 38,
+    CORNER_UP_RIGHT: 39,
+    CORNER_UP_LEFT: 40,
+
+    EIGHTH_1: 41,
+    EIGHTH_2: 42,
+    EIGHTH_3: 43,
+    EIGHTH_5: 44,
+    EIGHTH_6: 45,
+    EIGHTH_7: 46,
 } as const;
+
+/**
+ * Cobertura vertical em oitavos, preenchendo a partir da base da célula.
+ * O índice é o número de oitavos; 4 é o meio bloco, que já existe.
+ */
+const LOWER_EIGHTHS: readonly number[] = [
+    GLYPH.BLANK,
+    GLYPH.EIGHTH_1,
+    GLYPH.EIGHTH_2,
+    GLYPH.EIGHTH_3,
+    GLYPH.HALF_BOTTOM,
+    GLYPH.EIGHTH_5,
+    GLYPH.EIGHTH_6,
+    GLYPH.EIGHTH_7,
+    GLYPH.BLOCK_FULL,
+];
+
+/** Glifo para uma fração de cobertura vertical de 0 a 1, medida da base. */
+export const verticalCoverageGlyph = (fraction: number): number =>
+    LOWER_EIGHTHS[Math.max(0, Math.min(8, Math.round(fraction * 8)))] ?? GLYPH.BLANK;
+
+/**
+ * Canto que liga um braço horizontal a um vertical.
+ *
+ * É o que emenda os degraus de uma linha rasa: sem canto, a corrida de `─` de
+ * uma fileira e a da fileira seguinte parecem dois traços soltos; com canto,
+ * viram uma polilinha só.
+ */
+export const cornerGlyph = (right: boolean, down: boolean): number => {
+    if (right) return down ? GLYPH.CORNER_RIGHT_DOWN : GLYPH.CORNER_UP_RIGHT;
+    return down ? GLYPH.CORNER_LEFT_DOWN : GLYPH.CORNER_UP_LEFT;
+};
+
+/**
+ * Padrão de cobertura 2x2 para glifo, indexado por máscara de bits:
+ * 1 = superior esquerdo, 2 = superior direito, 4 = inferior esquerdo,
+ * 8 = inferior direito. Os 16 casos existem, então a borda de qualquer forma
+ * pode ser representada exatamente no dobro da resolução da célula.
+ */
+export const QUADRANT_BY_MASK: readonly number[] = [
+    GLYPH.BLANK,        // 0000
+    GLYPH.QUAD_TL,      // 0001
+    GLYPH.QUAD_TR,      // 0010
+    GLYPH.HALF_TOP,     // 0011
+    GLYPH.QUAD_BL,      // 0100
+    GLYPH.HALF_LEFT,    // 0101
+    GLYPH.QUAD_TR_BL,   // 0110
+    GLYPH.QUAD_NO_BR,   // 0111
+    GLYPH.QUAD_BR,      // 1000
+    GLYPH.QUAD_TL_BR,   // 1001
+    GLYPH.HALF_RIGHT,   // 1010
+    GLYPH.QUAD_NO_BL,   // 1011
+    GLYPH.HALF_BOTTOM,  // 1100
+    GLYPH.QUAD_NO_TR,   // 1101
+    GLYPH.QUAD_NO_TL,   // 1110
+    GLYPH.BLOCK_FULL,   // 1111
+];
 
 /**
  * Índice 0 é reservado para "célula vazia", então limpar o buffer com zeros já
@@ -78,4 +180,63 @@ export const buildPaletteTexels = (): Uint8Array => {
         texels[offset + 3] = 255;
     });
     return texels;
+};
+
+const ORIENTATION = { H: 1, V: 2, RISING: 4, FALLING: 8 } as const;
+
+const orientationOf = (glyph: number): number => {
+    switch (glyph) {
+        case GLYPH.LINE_H:
+        case GLYPH.HEAVY_H:
+        case GLYPH.DASH:
+        case GLYPH.UNDERSCORE:
+            return ORIENTATION.H;
+        case GLYPH.LINE_V:
+        case GLYPH.HEAVY_V:
+        case GLYPH.PIPE:
+            return ORIENTATION.V;
+        case GLYPH.LINE_UP:
+        case GLYPH.SLASH:
+            return ORIENTATION.RISING;
+        case GLYPH.LINE_DOWN:
+        case GLYPH.BACKSLASH:
+            return ORIENTATION.FALLING;
+        case GLYPH.LINE_CROSS:
+        case GLYPH.HEAVY_CROSS:
+        case GLYPH.CORNER_RIGHT_DOWN:
+        case GLYPH.CORNER_LEFT_DOWN:
+        case GLYPH.CORNER_UP_RIGHT:
+        case GLYPH.CORNER_UP_LEFT:
+            return ORIENTATION.H | ORIENTATION.V;
+        case GLYPH.LINE_X:
+            return ORIENTATION.RISING | ORIENTATION.FALLING;
+        default:
+            return 0;
+    }
+};
+
+const isHeavy = (glyph: number): boolean =>
+    glyph === GLYPH.HEAVY_H || glyph === GLYPH.HEAVY_V || glyph === GLYPH.HEAVY_CROSS;
+
+/**
+ * Combina duas linhas que caem na mesma célula.
+ *
+ * Sem isto, num cruzamento a segunda linha apaga a primeira e a grade fica com
+ * buracos justamente nos pontos que definem o quadriculado. Um cruzamento de
+ * verdade tem glifo próprio.
+ */
+export const mergeLineGlyphs = (existing: number, incoming: number): number => {
+    if (existing === incoming) return incoming;
+
+    const mask = orientationOf(existing) | orientationOf(incoming);
+    const heavy = isHeavy(existing) || isHeavy(incoming);
+
+    if (mask & ORIENTATION.H && mask & ORIENTATION.V) {
+        return heavy ? GLYPH.HEAVY_CROSS : GLYPH.LINE_CROSS;
+    }
+    if (mask & ORIENTATION.RISING && mask & ORIENTATION.FALLING) {
+        return GLYPH.LINE_X;
+    }
+    // Nada a combinar: o mais recente vence, como antes.
+    return incoming;
 };

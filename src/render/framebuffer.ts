@@ -1,3 +1,5 @@
+import { mergeLineGlyphs } from './palette';
+
 /**
  * Grade de células no formato que a GPU consome direto.
  *
@@ -66,6 +68,39 @@ export class Framebuffer {
         const current = this.depth[index]!;
         if (depth > current + Math.abs(current) * DEPTH_TOLERANCE) return;
 
+        this.write(index, glyph, color, depth, alpha);
+    }
+
+    /**
+     * Como `plot`, mas combina glifos de linha que dividem a mesma célula à
+     * mesma distância — é o que transforma um cruzamento em `┼` em vez de uma
+     * linha apagando a outra.
+     */
+    plotLine(
+        col: number,
+        row: number,
+        glyph: number,
+        color: number,
+        depth: number,
+        alpha = 255,
+    ): void {
+        if (col < 0 || col >= this.colCount || row < 0 || row >= this.rowCount) return;
+
+        const index = row * this.colCount + col;
+        const current = this.depth[index]!;
+        const slack = Math.abs(current) * DEPTH_TOLERANCE;
+        if (depth > current + slack) return;
+
+        // `current - slack` é NaN numa célula vazia (infinito menos infinito), o
+        // que reprova a comparação e cai no caminho de escrita simples. É o
+        // comportamento certo: não há nada com que combinar.
+        const merged =
+            depth >= current - slack ? mergeLineGlyphs(this.data[index * 4]!, glyph) : glyph;
+
+        this.write(index, merged, color, depth, alpha);
+    }
+
+    private write(index: number, glyph: number, color: number, depth: number, alpha: number): void {
         this.depth[index] = depth;
         const offset = index * 4;
         this.data[offset] = glyph;

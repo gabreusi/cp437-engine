@@ -2,8 +2,8 @@ import { settings } from '../config';
 import { COLOR, GLYPH } from './palette';
 import { SLOPE, type Fragment, type LineStyle, type Slope } from './rasterizer';
 
-/** Onde as linhas horizontais deixam de ser `_` rente ao chão e viram `-`. */
-const UNDERSCORE_RANGE = 0.12;
+/** Fração do alcance dentro da qual as linhas são desenhadas em traço pesado. */
+const HEAVY_RANGE = 0.12;
 
 const BAND_NEAR = 0.35;
 const BAND_MID = 0.7;
@@ -19,20 +19,26 @@ const fogAmount = (depth: number): number => {
     return Math.min(1, (depth / settings.viewDistance) * settings.fogDensity * 1.6);
 };
 
+/**
+ * Glifos de box-drawing, não os caracteres de texto.
+ *
+ * `-` e `|` vinham da fonte e não encostavam nas células vizinhas, então a
+ * grade saía tracejada. `─` e `│` são desenhados para preencher a célula
+ * inteira e emendam. O peso do traço substitui o antigo par `_`/`-` como pista
+ * de profundidade: perto é grosso, longe é fino.
+ */
 const glyphForSlope = (slope: Slope, depth: number): number => {
+    const heavy = depth < settings.viewDistance * HEAVY_RANGE;
+
     switch (slope) {
         case SLOPE.VERTICAL:
-            return GLYPH.PIPE;
+            return heavy ? GLYPH.HEAVY_V : GLYPH.LINE_V;
         case SLOPE.UP:
-            return GLYPH.SLASH;
+            return GLYPH.LINE_UP;
         case SLOPE.DOWN:
-            return GLYPH.BACKSLASH;
+            return GLYPH.LINE_DOWN;
         default:
-            // Perto, `_` assenta no chão; longe, `-` pesa menos. Mesma regra da
-            // versão anterior, agora por profundidade real e não por fileira.
-            return depth < settings.viewDistance * UNDERSCORE_RANGE
-                ? GLYPH.UNDERSCORE
-                : GLYPH.DASH;
+            return heavy ? GLYPH.HEAVY_H : GLYPH.LINE_H;
     }
 };
 
