@@ -47,20 +47,32 @@ void main() {
     float alpha = data.g;
     if (alpha <= 0.0) discard;
 
+    vec4 colorData = texelFetch(uGridColor, cell, 0);
+    // Marca de Framebuffer.plot: corpo sólido (hachura de face), não
+    // traço. Ver o comentário lá — sem ela o vão entre a tinta de um glifo
+    // escuro deixaria passar o que está atrás de um corpo opaco.
+    bool opaque = colorData.a > 0.5;
+
     int glyph = int(data.r * 255.0 + 0.5);
     int atlasCols = int(uAtlasGrid.x);
     vec2 glyphCell = vec2(float(glyph % atlasCols), float(glyph / atlasCols));
     vec2 atlasUv = (glyphCell + fract(gridPos)) / uAtlasGrid;
 
     float coverage = texture(uAtlas, atlasUv).a;
-    if (coverage <= 0.0) discard;
+    if (coverage <= 0.0 && !opaque) discard;
 
     // O emissivo é o que deixa a célula passar de 1.0 e virar halo no bloom,
     // que não tem bright-pass: quem estoura é quem brilha.
-    vec3 rgb = texelFetch(uGridColor, cell, 0).rgb;
-    rgb *= 1.0 + data.b * uEmissiveRange;
+    vec3 rgb = colorData.rgb * (1.0 + data.b * uEmissiveRange);
 
-    fragColor = vec4(rgb, coverage * alpha);
+    // Traço (linha de grade, estrela, aresta) continua sendo tinta sobre o
+    // vazio: o vão entre os traços do glifo deixa passar o que está atrás,
+    // de propósito. Corpo sólido bloqueia sempre — coberto pela tinta ou
+    // não —, senão a face escura de um objeto vira janela para o céu.
+    float finalAlpha = opaque ? alpha : coverage * alpha;
+    vec3 finalRgb = (opaque && coverage <= 0.0) ? vec3(0.0) : rgb;
+
+    fragColor = vec4(finalRgb, finalAlpha);
 }`;
 
 const createDataTexture = (

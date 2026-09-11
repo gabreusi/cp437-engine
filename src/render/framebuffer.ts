@@ -12,7 +12,7 @@ import type { Rgb } from "../math/color";
  *            A = 255, reservado
  *
  *   colors   R, G, B = cor da célula
- *            A = não usado
+ *            A = opaca — 255 numa face sólida, 0 num traço (ver `plot`)
  *
  * São dois planos e não um porque a célula precisa de cinco bytes: quatro para
  * glifo, alpha e emissivo, mais três de cor. A versão anterior cabia em um só
@@ -99,6 +99,21 @@ export class Framebuffer {
     depth: number,
     alpha = 1,
     emissive = 0,
+    /**
+     * A célula é corpo sólido, não traço.
+     *
+     * Separa "quanto a névoa comeu" (`alpha`, sempre por onde a distância
+     * dissolve) de "há vácuo atrás disto" — as duas eram a mesma pergunta
+     * enquanto só existia traço sobre o vazio, mas uma face hachurada (ver
+     * `hatch.ts`) representa um corpo opaco com glifos esparsos, e um glifo
+     * esparso tem a maior parte da célula sem tinta. Sem esta marca, o vão
+     * entre as hastes do glifo é lido pelo composite (`grid.ts`) como "nada
+     * foi desenhado aqui" e deixa passar o céu ou a bruma do chão por trás de
+     * um corpo que deveria bloquear os dois. Falso é o traço de sempre: linha
+     * de grade, estrela, aresta — coisas que sempre foram vazio entre a
+     * tinta, de propósito.
+     */
+    opaque = false,
   ): void {
     if (col < 0 || col >= this.colCount || row < 0 || row >= this.rowCount)
       return;
@@ -118,6 +133,6 @@ export class Framebuffer {
     this.colors[offset] = toByte(color.r);
     this.colors[offset + 1] = toByte(color.g);
     this.colors[offset + 2] = toByte(color.b);
-    this.colors[offset + 3] = 255;
+    this.colors[offset + 3] = opaque ? 255 : 0;
   }
 }

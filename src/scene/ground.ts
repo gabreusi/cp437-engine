@@ -76,6 +76,7 @@ export class Ground implements Renderable {
     color: rgb(),
     alpha: 1,
     emissive: 0,
+    opaque: false,
   };
 
   render(context: RenderContext): void {

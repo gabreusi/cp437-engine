@@ -20,6 +20,14 @@ export interface Fragment {
   alpha: number;
   /** Brilho acima de 1. Só ele passa do tone map e vira halo no bloom. */
   emissive: number;
+  /**
+   * Corpo sólido, não traço — ver `Framebuffer.plot`.
+   *
+   * `true` bloqueia o que está atrás mesmo onde o glifo escolhido não tem
+   * tinta; `false` deixa o vão entre a tinta transparente, como sempre foi
+   * para linha de grade, estrela e aresta.
+   */
+  opaque: boolean;
 }
 
 /**
@@ -91,6 +99,7 @@ export class Rasterizer {
     color: rgb(),
     alpha: 1,
     emissive: 0,
+    opaque: false,
   };
   private readonly sample: SurfaceSample = {
     x: 0,
@@ -319,6 +328,7 @@ export class Rasterizer {
         depth,
         this.fragment.alpha,
         this.fragment.emissive,
+        this.fragment.opaque,
       );
     }
   }
@@ -465,8 +475,18 @@ export class Rasterizer {
     depth: number,
     alpha = 1,
     emissive = 0,
+    opaque = false,
   ): void {
-    this.framebuffer.plot(col, row, glyph, color, depth, alpha, emissive);
+    this.framebuffer.plot(
+      col,
+      row,
+      glyph,
+      color,
+      depth,
+      alpha,
+      emissive,
+      opaque,
+    );
   }
 
   /** Escreve uma célula já projetada. Estrelas e o sol usam este caminho. */
@@ -476,6 +496,7 @@ export class Rasterizer {
     color: Rgb,
     alpha = 1,
     emissive = 0,
+    opaque = false,
   ): void {
     this.framebuffer.plot(
       Math.round(projected.col),
@@ -485,6 +506,7 @@ export class Rasterizer {
       projected.depth,
       alpha,
       emissive,
+      opaque,
     );
   }
 }

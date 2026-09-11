@@ -340,6 +340,11 @@ export class SurfacePen {
 
     out.alpha = (1 - fog) ** 1.2;
 
+    // Área preenchida é corpo, não traço: bloqueia o que está atrás mesmo
+    // onde o glifo escolhido — escuro de propósito — não tem tinta. Ver
+    // `Fragment.opaque`.
+    out.opaque = this.area;
+
     // O nível mais baixo da rampa clássica é o espaço: a célula não some,
     // ela fica vazia. Descartar aqui poupa a escrita e o teste de
     // profundidade de algo que o shader descartaria por cobertura zero.
