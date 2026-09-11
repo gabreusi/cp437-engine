@@ -9,6 +9,7 @@
 const seed = Math.random() * 10000;
 
 export const hashNoise = (x: number, y: number): number => {
-    const wave = Math.sin((x + seed) * 12.9898 + (y + seed) * 78.233) * 43758.5453;
-    return wave - Math.floor(wave);
+  const wave =
+    Math.sin((x + seed) * 12.9898 + (y + seed) * 78.233) * 43758.5453;
+  return wave - Math.floor(wave);
 };

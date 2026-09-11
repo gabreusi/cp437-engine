@@ -1,19 +1,21 @@
 <!doctype html>
 <html lang="pt-BR">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Engine 3D que rasteriza para caracteres, com luz colorida, sombras e reflexos.">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Engine 3D que rasteriza para caracteres, com luz colorida, sombras e reflexos."
+    />
     <title>CP437 Engine</title>
-</head>
-<body>
+  </head>
+  <body>
+    <!-- Palco: o grid de caracteres inteiro sai de um draw call neste canvas. -->
+    <div id="stage">
+      <canvas id="canvas" aria-label="Cena ASCII"></canvas>
+    </div>
 
-<!-- Palco: o grid de caracteres inteiro sai de um draw call neste canvas. -->
-<div id="stage">
-    <canvas id="canvas" aria-label="Cena ASCII"></canvas>
-</div>
-
-<div id="hud" role="status"></div>
-<script type="module" src="/src/main.ts"></script>
-</body>
+    <div id="hud" role="status"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>

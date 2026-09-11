@@ -1,5 +1,5 @@
-import { CHARSET } from '../palette';
-import { CELL_ASPECT } from '../viewport';
+import { CHARSET } from "../palette";
+import { CELL_ASPECT } from "../viewport";
 
 /** Colunas no atlas. Com 128 glifos, o atlas fecha em oito fileiras exatas. */
 export const ATLAS_COLS = 16;
@@ -30,28 +30,28 @@ const MAX_CELL = 64;
  * e os traços finos saem irregulares — 1:1 é o que mantém o glifo inteiro.
  */
 export const atlasCellWidthFor = (cellWidthDevicePx: number): number =>
-    Math.min(MAX_CELL, Math.max(MIN_CELL, Math.round(cellWidthDevicePx)));
+  Math.min(MAX_CELL, Math.max(MIN_CELL, Math.round(cellWidthDevicePx)));
 
 export interface GlyphAtlas {
-    texture: WebGLTexture;
-    cols: number;
-    rows: number;
-    cellWidth: number;
-    /**
-     * O canvas de origem, guardado para inspeção.
-     *
-     * O atlas é a única parte da engine que não dá para conferir pelo
-     * framebuffer: quando um glifo sai errado na tela mas certo no buffer, a
-     * resposta está aqui.
-     */
-    canvas: HTMLCanvasElement;
+  texture: WebGLTexture;
+  cols: number;
+  rows: number;
+  cellWidth: number;
+  /**
+   * O canvas de origem, guardado para inspeção.
+   *
+   * O atlas é a única parte da engine que não dá para conferir pelo
+   * framebuffer: quando um glifo sai errado na tela mas certo no buffer, a
+   * resposta está aqui.
+   */
+  canvas: HTMLCanvasElement;
 }
 
 interface CellBox {
-    x: number;
-    y: number;
-    w: number;
-    h: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
 type GlyphPainter = (ctx: CanvasRenderingContext2D, box: CellBox) => void;
@@ -64,18 +64,18 @@ type GlyphPainter = (ctx: CanvasRenderingContext2D, box: CellBox) => void;
  * célula vizinha, e o vazamento aparece como traço fantasma no glifo do lado.
  */
 const spanRect = (
-    ctx: CanvasRenderingContext2D,
-    box: CellBox,
-    fx: number,
-    fy: number,
-    fw: number,
-    fh: number,
+  ctx: CanvasRenderingContext2D,
+  box: CellBox,
+  fx: number,
+  fy: number,
+  fw: number,
+  fh: number,
 ): void => {
-    const x0 = Math.round(box.x + fx * box.w);
-    const y0 = Math.round(box.y + fy * box.h);
-    const x1 = Math.round(box.x + (fx + fw) * box.w);
-    const y1 = Math.round(box.y + (fy + fh) * box.h);
-    ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+  const x0 = Math.round(box.x + fx * box.w);
+  const y0 = Math.round(box.y + fy * box.h);
+  const x1 = Math.round(box.x + (fx + fw) * box.w);
+  const y1 = Math.round(box.y + (fy + fh) * box.h);
+  ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
 };
 
 /** Fração da largura da célula que um traço da moldura ocupa. */
@@ -89,10 +89,10 @@ const STROKE = 0.14;
  * metade exata, é o que faz `┌` e `└` alinharem a mesma coluna vertical.
  */
 const strokeSpans = (box: CellBox) => {
-    const thickness = Math.max(1, Math.round(box.w * STROKE));
-    const tx = thickness / box.w;
-    const ty = thickness / box.h;
-    return { tx, ty, cx: 0.5 - tx / 2, cy: 0.5 - ty / 2 };
+  const thickness = Math.max(1, Math.round(box.w * STROKE));
+  const tx = thickness / box.w;
+  const ty = thickness / box.h;
+  return { tx, ty, cx: 0.5 - tx / 2, cy: 0.5 - ty / 2 };
 };
 
 /**
@@ -103,32 +103,38 @@ const strokeSpans = (box: CellBox) => {
  * seria onze chances de desalinhar o centro.
  */
 const boxPainter =
-    (left: boolean, right: boolean, up: boolean, down: boolean): GlyphPainter =>
-    (ctx, box) => {
-        const { tx, ty, cx, cy } = strokeSpans(box);
-        if (left) spanRect(ctx, box, 0, cy, cx + tx, ty);
-        if (right) spanRect(ctx, box, cx, cy, 1 - cx, ty);
-        if (up) spanRect(ctx, box, cx, 0, tx, cy + ty);
-        if (down) spanRect(ctx, box, cx, cy, tx, 1 - cy);
-    };
+  (left: boolean, right: boolean, up: boolean, down: boolean): GlyphPainter =>
+  (ctx, box) => {
+    const { tx, ty, cx, cy } = strokeSpans(box);
+    if (left) spanRect(ctx, box, 0, cy, cx + tx, ty);
+    if (right) spanRect(ctx, box, cx, cy, 1 - cx, ty);
+    if (up) spanRect(ctx, box, cx, 0, tx, cy + ty);
+    if (down) spanRect(ctx, box, cx, cy, tx, 1 - cy);
+  };
 
 /** Triângulo cheio apontando para um lado. As setas dos sliders do menu. */
 const arrowPainter =
-    (dx: number, dy: number): GlyphPainter =>
-    (ctx, box) => {
-        // Recuado da borda: encostado, a seta lê como bloco e some do slider.
-        const inset = 0.2;
-        const half = 0.5 - inset;
-        const cx = box.x + box.w / 2;
-        const cy = box.y + box.h / 2;
+  (dx: number, dy: number): GlyphPainter =>
+  (ctx, box) => {
+    // Recuado da borda: encostado, a seta lê como bloco e some do slider.
+    const inset = 0.2;
+    const half = 0.5 - inset;
+    const cx = box.x + box.w / 2;
+    const cy = box.y + box.h / 2;
 
-        ctx.beginPath();
-        ctx.moveTo(cx + dx * half * box.w, cy + dy * half * box.h);
-        ctx.lineTo(cx - (dx * half + dy * half) * box.w, cy - (dy * half + dx * half) * box.h);
-        ctx.lineTo(cx - (dx * half - dy * half) * box.w, cy - (dy * half - dx * half) * box.h);
-        ctx.closePath();
-        ctx.fill();
-    };
+    ctx.beginPath();
+    ctx.moveTo(cx + dx * half * box.w, cy + dy * half * box.h);
+    ctx.lineTo(
+      cx - (dx * half + dy * half) * box.w,
+      cy - (dy * half + dx * half) * box.h,
+    );
+    ctx.lineTo(
+      cx - (dx * half - dy * half) * box.w,
+      cy - (dy * half - dx * half) * box.h,
+    );
+    ctx.closePath();
+    ctx.fill();
+  };
 
 /**
  * Glifos desenhados à mão, não tirados da fonte.
@@ -138,40 +144,42 @@ const arrowPainter =
  * da base, e uma moldura de menu sairia com fresta em cada emenda.
  */
 const PAINTERS: Record<string, GlyphPainter> = {
-    /**
-     * O bloco cheio, encostando nas quatro bordas.
-     *
-     * O `█` da fonte para antes da base — a mesma métrica de 1:1,67 numa célula
-     * 1:2 — e o resultado é uma fresta horizontal entre fileiras. Numa silhueta
-     * de sol isso é um detalhe; num fundo de menu é a cena inteira aparecendo
-     * através de listras.
-     */
-    '█': (ctx, box) => spanRect(ctx, box, 0, 0, 1, 1),
-    '▀': (ctx, box) => spanRect(ctx, box, 0, 0, 1, 0.5),
-    '▄': (ctx, box) => spanRect(ctx, box, 0, 0.5, 1, 0.5),
+  /**
+   * O bloco cheio, encostando nas quatro bordas.
+   *
+   * O `█` da fonte para antes da base — a mesma métrica de 1:1,67 numa célula
+   * 1:2 — e o resultado é uma fresta horizontal entre fileiras. Numa silhueta
+   * de sol isso é um detalhe; num fundo de menu é a cena inteira aparecendo
+   * através de listras.
+   */
+  "█": (ctx, box) => spanRect(ctx, box, 0, 0, 1, 1),
+  "▀": (ctx, box) => spanRect(ctx, box, 0, 0, 1, 0.5),
+  "▄": (ctx, box) => spanRect(ctx, box, 0, 0.5, 1, 0.5),
+  "▌": (ctx, box) => spanRect(ctx, box, 0, 0, 0.5, 1),
+  "▐": (ctx, box) => spanRect(ctx, box, 0.5, 0, 0.5, 1),
 
-    // Espessura semelhante à do `_` da fonte, mas colado na base da célula.
-    '▁': (ctx, box) => {
-        const thickness = Math.max(1, Math.round(box.w * STROKE));
-        spanRect(ctx, box, 0, 1 - thickness / box.h, 1, thickness / box.h);
-    },
+  // Espessura semelhante à do `_` da fonte, mas colado na base da célula.
+  "▁": (ctx, box) => {
+    const thickness = Math.max(1, Math.round(box.w * STROKE));
+    spanRect(ctx, box, 0, 1 - thickness / box.h, 1, thickness / box.h);
+  },
 
-    '─': boxPainter(true, true, false, false),
-    '│': boxPainter(false, false, true, true),
-    '┌': boxPainter(false, true, false, true),
-    '┐': boxPainter(true, false, false, true),
-    '└': boxPainter(false, true, true, false),
-    '┘': boxPainter(true, false, true, false),
-    '├': boxPainter(false, true, true, true),
-    '┤': boxPainter(true, false, true, true),
-    '┬': boxPainter(true, true, false, true),
-    '┴': boxPainter(true, true, true, false),
-    '┼': boxPainter(true, true, true, true),
+  "─": boxPainter(true, true, false, false),
+  "│": boxPainter(false, false, true, true),
+  "┌": boxPainter(false, true, false, true),
+  "┐": boxPainter(true, false, false, true),
+  "└": boxPainter(false, true, true, false),
+  "┘": boxPainter(true, false, true, false),
+  "├": boxPainter(false, true, true, true),
+  "┤": boxPainter(true, false, true, true),
+  "┬": boxPainter(true, true, false, true),
+  "┴": boxPainter(true, true, true, false),
+  "┼": boxPainter(true, true, true, true),
 
-    '◄': arrowPainter(-1, 0),
-    '►': arrowPainter(1, 0),
-    '▲': arrowPainter(0, -1),
-    '▼': arrowPainter(0, 1),
+  "◄": arrowPainter(-1, 0),
+  "►": arrowPainter(1, 0),
+  "▲": arrowPainter(0, -1),
+  "▼": arrowPainter(0, 1),
 };
 
 /**
@@ -182,56 +190,61 @@ const PAINTERS: Record<string, GlyphPainter> = {
  * padding faria os blocos pararem antes da borda, abrindo frestas na silhueta
  * do sol e nas emendas da grade.
  */
-export const buildGlyphAtlas = (gl: WebGL2RenderingContext, cellWidth: number): GlyphAtlas => {
-    const cellHeight = cellWidth * CELL_ASPECT;
-    const cols = ATLAS_COLS;
-    const rows = Math.ceil(CHARSET.length / cols);
+export const buildGlyphAtlas = (
+  gl: WebGL2RenderingContext,
+  cellWidth: number,
+): GlyphAtlas => {
+  const cellHeight = cellWidth * CELL_ASPECT;
+  const cols = ATLAS_COLS;
+  const rows = Math.ceil(CHARSET.length / cols);
 
-    const canvas = document.createElement('canvas');
-    canvas.width = cols * cellWidth;
-    canvas.height = rows * cellHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = cols * cellWidth;
+  canvas.height = rows * cellHeight;
 
-    const ctx = canvas.getContext('2d');
-    if (ctx === null) throw new Error('Canvas 2D indisponível para montar o atlas.');
+  const ctx = canvas.getContext("2d");
+  if (ctx === null)
+    throw new Error("Canvas 2D indisponível para montar o atlas.");
 
-    // A largura do avanço da fonte cresce linear com o tamanho, então uma
-    // medição basta para achar o tamanho que preenche a célula exatamente.
-    ctx.font = `${MEASURE_SIZE}px ${FONT_STACK}`;
-    const advanceAtMeasureSize = ctx.measureText('0').width;
+  // A largura do avanço da fonte cresce linear com o tamanho, então uma
+  // medição basta para achar o tamanho que preenche a célula exatamente.
+  ctx.font = `${MEASURE_SIZE}px ${FONT_STACK}`;
+  const advanceAtMeasureSize = ctx.measureText("0").width;
 
-    ctx.font = `${MEASURE_SIZE * (cellWidth / advanceAtMeasureSize)}px ${FONT_STACK}`;
-    ctx.fillStyle = '#ffffff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
+  ctx.font = `${MEASURE_SIZE * (cellWidth / advanceAtMeasureSize)}px ${FONT_STACK}`;
+  ctx.fillStyle = "#ffffff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
 
-    for (let index = 0; index < CHARSET.length; index += 1) {
-        const char = CHARSET[index] ?? ' ';
-        const box: CellBox = {
-            x: (index % cols) * cellWidth,
-            y: Math.floor(index / cols) * cellHeight,
-            w: cellWidth,
-            h: cellHeight,
-        };
+  for (let index = 0; index < CHARSET.length; index += 1) {
+    const char = CHARSET[index] ?? " ";
+    const box: CellBox = {
+      x: (index % cols) * cellWidth,
+      y: Math.floor(index / cols) * cellHeight,
+      w: cellWidth,
+      h: cellHeight,
+    };
 
-        const painter = PAINTERS[char];
-        if (painter !== undefined) {
-            painter(ctx, box);
-        } else {
-            ctx.fillText(char, box.x + box.w / 2, box.y + box.h / 2);
-        }
+    const painter = PAINTERS[char];
+    if (painter !== undefined) {
+      painter(ctx, box);
+    } else {
+      ctx.fillText(char, box.x + box.w / 2, box.y + box.h / 2);
     }
+  }
 
-    const texture = gl.createTexture();
-    if (texture === null) throw new Error('Não foi possível criar a textura do atlas.');
+  const texture = gl.createTexture();
+  if (texture === null)
+    throw new Error("Não foi possível criar a textura do atlas.");
 
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
-    return { texture, cols, rows, cellWidth, canvas };
+  return { texture, cols, rows, cellWidth, canvas };
 };

@@ -3,9 +3,9 @@
  * que espalhar `!` ou checagens de null pelos módulos de UI.
  */
 export const requireElement = <T extends HTMLElement>(id: string): T => {
-    const element = document.getElementById(id);
-    if (element === null) {
-        throw new Error(`Elemento obrigatório não encontrado no HTML: #${id}`);
-    }
-    return element as T;
+  const element = document.getElementById(id);
+  if (element === null) {
+    throw new Error(`Elemento obrigatório não encontrado no HTML: #${id}`);
+  }
+  return element as T;
 };

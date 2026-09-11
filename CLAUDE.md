@@ -1,0 +1,151 @@
+# CP437 Engine — guia para o Claude
+
+Engine 3D em TypeScript puro que rasteriza para uma grade de caracteres na CPU e
+apresenta tudo em **um draw call** WebGL2. Sem dependência de runtime (Three.js,
+libs de render ou de math não existem aqui — e não devem ser adicionadas).
+
+> O `README.md` é a fonte do **porquê**: cada decisão de projeto está justificada
+> lá, em prosa. Este arquivo é o **como**: contratos, invariantes e onde mexer.
+> Antes de "corrigir" algo que parece estranho, procure a decisão no README — a
+> maioria das esquisitices é deliberada e está documentada.
+
+## Comandos
+
+```bash
+npm run dev        # Vite + HMR
+npm run typecheck  # tsc --noEmit
+npm run build      # typecheck + bundle em dist/
+```
+
+Não há testes nem linter. **`npm run typecheck` é a única porta de qualidade** —
+rode depois de qualquer alteração. `tsconfig` é estrito de verdade:
+`noUncheckedIndexedAccess`, `noUnusedLocals/Parameters`, `verbatimModuleSyntax`
+(use `import type` para tipos). Formatação: Prettier com defaults, 2 espaços.
+
+## Convenções
+
+- **Comentários, docs e mensagens de commit em português.** Rótulos de interface
+  (menu, HUD) **em inglês**. Não misture.
+- Comentários explicam *por que*, não *o que*. O código já diz o quê.
+- Math com **destino explícito** (`out` como primeiro argumento) — `vec3.add(out,
+  a, b)`, `setRgb(out, …)`. **Nada aloca no hot path**: objetos reutilizados em
+  escopo de módulo ou campos privados da classe. Um `{x,y,z}` novo por fragmento
+  mata o orçamento de CPU.
+- Enums são objetos `as const` + `type X = (typeof X)[keyof typeof X]`
+  (`LIGHT`, `OCCLUDER`, `ENTITY`, `RAMP`, `TEXTURE`, `SLOPE`, `GLYPH`).
+- Ângulos em **radianos** no dado; graus só na fronteira da interface.
+
+## Pipeline
+
+```
+scene.contribute(ctx)  → LightWorld (luzes + occluders), antes de qualquer desenho
+scene.render(ctx)      → primitivas em coordenadas de MUNDO
+Rasterizer (CPU)       → view → clip near → projeção → célula → clip 2D → DDA
+SurfacePen.style       → shadeSurface (ambiente + luzes + sombra + reflexo)
+ramp                   → luminância + textura → glifo
+Framebuffer (CPU)      → 2 planos RGBA8: [glifo, alpha, emissivo, 255] e [r,g,b,255]
+GlPresenter (GPU)      → background → grid → bloom → composite
+```
+
+## Contratos que todo código novo respeita
+
+**`Renderable` (`scene/scene.ts`)** — `contribute?(ctx)` registra luz/corpo,
+`render(ctx)` desenha. Nunca desenhe em `contribute`, nunca registre luz em
+`render`: iluminação não pode depender da ordem da lista da cena.
+
+**`RenderContext`** — `{ camera, viewport, rasterizer, time, lights, shading }`.
+Reaproveitado; não guarde referência entre quadros.
+
+**`Rasterizer` (`render/rasterizer.ts`)** — única fonte de primitivas:
+`line(a, b, style)`, `disc(center, raio, …)`, `plot/plotCell`, `project`,
+`projectDirection`, `rayThrough(col,row,out)` (caminho inverso, usado por
+seleção e preenchimento do chão), `radiusRowsAt`, `angularRadiusRows`,
+`horizonRow`, `cellIsEmpty`. **A engine só sabe desenhar linha e disco** — uma
+face sólida é `hatch.ts` repetindo linhas na densidade que a tela pede.
+
+**`SurfacePen` (`render/shading.ts`)** — a ponte luz→caractere. Segura
+`material`, `normal(x,y,z)`, `ownerId` (para não se auto-sombrear), `texture`,
+`area` (face preenchida usa a rampa inteira; aresta usa rampa por família),
+`fogged`, e o gancho `beforeShade` (só o chão usa). Entrega `pen.style` ao
+rasterizador. `begin(ctx)` uma vez por quadro.
+
+**`LightWorld` (`light/world.ts`)** — pool. `begin()` zera contadores,
+`addLight()` / `addOccluder(ownerId)` devolvem objetos reciclados; **preencha
+todos os campos**, o anterior ainda está lá.
+
+**`EntityKindDef` (`scene/entities/entity.ts`)** — tipo de objeto = dado
+(`EntityState`, um formato só) + comportamento no registro `ENTITY_KINDS`
+(`scene/world.ts`): `defaults`, `contribute`, `render`, `fields`, `uniformSize`.
+
+**`Framebuffer`** — `plot()` faz o teste de profundidade com tolerância
+(`DEPTH_TOLERANCE`; sem ela a grade sai picotada). `isEmpty()` lê o **alpha**,
+não a profundidade. Valores acima de 1.0 vão para o canal emissivo
+(`EMISSIVE_RANGE = 4`), via `writeHdrColor` — é o que vira halo no bloom.
+
+## Invariantes que quebram em silêncio
+
+- **Interpole em `1/w`**, nunca em `w`: profundidade e posição de mundo. Senão a
+  névoa e a sombra escorregam quando a câmera gira.
+- **Clip em dois estágios**: near plane em espaço de view (antes da divisão
+  perspectiva) e retângulo de tela (antes do DDA).
+- **`aspect = (colCount / rowCount) / CELL_ASPECT`**, `CELL_ASPECT = 2` — a
+  célula é 1:2. Entra na projeção uma vez só.
+- **Céu não tem paralaxe**: estrelas e sol são direções unitárias, só rotação.
+- **O sol se descreve em `lights.sky`** (`sunGlow`, `horizonGlow`, `sunSpread`)
+  durante `contribute`; `main.ts` e `sky-colors.ts`/shader só **leem**. Nunca
+  recalcule o céu num segundo lugar — o reflexo e o fundo divergiriam.
+- Alinhamento horizonte/bruma depende de `Math.round(horizonRow())` casar entre
+  `Sky.drawHorizon`, `Ground` e `updateAtmosphere` em `main.ts`.
+- Ruído de textura irregular é ancorado em **posição de mundo quantizada**, nunca
+  em célula de tela.
+- `webglcontextlost` é tratado desde o começo (`gl/context.ts`); recursos são
+  recriados. Não assuma contexto vivo.
+
+## Onde mexer
+
+| Quero… | Vá em |
+| --- | --- |
+| novo ajuste do menu | `config.ts` (`Settings` + default) → `ui/menu/schema.ts` (grupo) |
+| novo tipo de objeto | `scene/entities/<novo>.ts` com `EntityKindDef` → registre em `ENTITY_KINDS` e `ENTITY_ORDER` (`scene/world.ts`) → `ENTITY` em `entity.ts` |
+| novo glifo | `render/palette.ts` (`GLYPH`, `CHARSET` — tabela CP437 real); desenhados à mão em `render/gl/atlas.ts` (`PAINTERS`, indexado por caractere) |
+| efeito de tela | `render/gl/passes/` + ordem em `gl/presenter.ts` |
+| como a luz vira caractere | `render/ramp.ts` (rampa e texturas) |
+| escolha de glifo por forma (aresta, disco, cobertura de preenchimento) | `render/glyph-shape.ts` (amostragem, contraste, vizinho mais próximo) + candidatos em `render/ramp.ts` |
+| matemática de luz | `light/shade.ts` (kernel) e `light/trace.ts` (raio×esfera/caixa) |
+| gesto de edição | `ui/manipulator.ts` (um só, para menu e editor) |
+
+O atlas tem 256 glifos na ordem da **CP437 real** — `render/palette.ts` monta
+`CHARSET` como essa tabela, e `glyphForChar` traduz caractere → índice por
+mapa (não por aritmética: a CP437 não é contígua com o código Unicode). Um
+acento fora da CP437 (`ã`, `õ`) cai para a letra sem acento antes de virar
+espaço. Ver "O nome" no README.
+
+## Persistência e estado
+
+- `settings` (`config.ts`) = preferência de quem olha. **Não é salvo.**
+- `World` (`scene/world.ts`) = conteúdo. Salvo em `localStorage` sob
+  `cp437-engine/scene`; `current` (posição animada) é derivado e não serializa.
+  No `load`, o salvo é mesclado sobre `createEntity(kind, defaults())` — campos
+  novos nascem com valor sensato em cenas antigas.
+
+## Depuração
+
+`window.engine` em dev (`main.ts`): `camera`, `settings`, `scene`, `world`,
+`lights`, `menu`, `editor`, `manipulator`, `cursor`, `rasterizer`, `presenter`,
+`input`, `freecam`, `capture(escala)`, `dumpGlyphs()`, `countByColor()`,
+`showCharset()`, `setOverlay(fn)`, `step(dt)`.
+
+`step()` é essencial: em aba de segundo plano o `requestAnimationFrame` não
+dispara, e verificar "mudei o ajuste, o que aconteceu?" mediria o quadro
+anterior. `dumpGlyphs`/`countByColor` respondem o que a GPU não responde: qual
+caractere está mesmo na célula, e que camada sumiu.
+
+## Custo
+
+180 colunas × 120 fileiras no teto (`render/viewport.ts`). O orçamento por
+fragmento é ~100× o de um shader de pixel, e é isso que torna traçado de raio na
+CPU viável. Referência: cena demo ≈ 4,4 ms de CPU/quadro; 13 luzes e 16 corpos
+≈ 6,4 ms. O HUD mostra `sceneMs`, luzes e occluders — **é o número a vigiar** ao
+mexer em `light/`, `shading.ts` ou `ground.ts`. Cortes que existem de propósito:
+`range` da luz, `shadowThreshold`, `maxShadowLights`, e o duplo sombreamento do
+chão (sonda barata sem sombra → completo só para quem passa do limiar).

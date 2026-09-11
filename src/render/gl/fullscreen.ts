@@ -16,5 +16,5 @@ void main() {
 }`;
 
 export const drawFullscreen = (gl: WebGL2RenderingContext): void => {
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
 };

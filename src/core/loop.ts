@@ -20,37 +20,37 @@ export type RenderFn = (timeMs: number) => void;
  * depois sem ficar amarrada ao monitor de quem está jogando.
  */
 export class GameLoop {
-    private accumulator = 0;
-    private lastTime = 0;
-    private running = false;
+  private accumulator = 0;
+  private lastTime = 0;
+  private running = false;
 
-    constructor(
-        private readonly update: UpdateFn,
-        private readonly render: RenderFn,
-    ) {}
+  constructor(
+    private readonly update: UpdateFn,
+    private readonly render: RenderFn,
+  ) {}
 
-    start(): void {
-        if (this.running) return;
-        this.running = true;
-        this.lastTime = performance.now();
-        requestAnimationFrame(this.frame);
+  start(): void {
+    if (this.running) return;
+    this.running = true;
+    this.lastTime = performance.now();
+    requestAnimationFrame(this.frame);
+  }
+
+  private readonly frame = (time: number): void => {
+    if (!this.running) return;
+
+    this.accumulator += (time - this.lastTime) / 1000;
+    this.lastTime = time;
+
+    let steps = 0;
+    while (this.accumulator >= FIXED_STEP && steps < MAX_STEPS_PER_FRAME) {
+      this.update(FIXED_STEP);
+      this.accumulator -= FIXED_STEP;
+      steps += 1;
     }
+    if (steps === MAX_STEPS_PER_FRAME) this.accumulator = 0;
 
-    private readonly frame = (time: number): void => {
-        if (!this.running) return;
-
-        this.accumulator += (time - this.lastTime) / 1000;
-        this.lastTime = time;
-
-        let steps = 0;
-        while (this.accumulator >= FIXED_STEP && steps < MAX_STEPS_PER_FRAME) {
-            this.update(FIXED_STEP);
-            this.accumulator -= FIXED_STEP;
-            steps += 1;
-        }
-        if (steps === MAX_STEPS_PER_FRAME) this.accumulator = 0;
-
-        this.render(time);
-        requestAnimationFrame(this.frame);
-    };
+    this.render(time);
+    requestAnimationFrame(this.frame);
+  };
 }

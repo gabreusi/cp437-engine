@@ -1,12 +1,19 @@
-import { settings } from '../config';
-import { type Rgb, copyRgb, rgb, setRgb } from '../math/color';
-import { NO_OWNER, type ShadeOptions, shadeSurface } from '../light/shade';
-import type { Material } from '../light/types';
-import { LightWorld } from '../light/world';
-import type { RenderContext } from '../scene/scene';
-import { COLOR, GLYPH } from './palette';
-import { RAMP, glyphForLuminance } from './ramp';
-import { SLOPE, type Fragment, type Slope, type SurfaceSample, type SurfaceStyle } from './rasterizer';
+import { settings } from "../config";
+import { type Rgb, copyRgb, rgb, setRgb } from "../math/color";
+import { NO_OWNER, type ShadeOptions, shadeSurface } from "../light/shade";
+import type { Material } from "../light/types";
+import { LightWorld } from "../light/world";
+import type { RenderContext } from "../scene/scene";
+import { COLOR, GLYPH } from "./palette";
+import {
+  RAMP,
+  TEXTURE,
+  type SurfaceTexture,
+  glyphForLineShape,
+  glyphForLuminance,
+  glyphForPatch,
+} from "./ramp";
+import type { Fragment, SurfaceSample, SurfaceStyle } from "./rasterizer";
 
 /** Onde as linhas horizontais deixam de ser `_` rente ao chão e viram `-`. */
 const UNDERSCORE_RANGE = 0.12;
@@ -15,41 +22,67 @@ const BAND_NEAR = 0.35;
 const BAND_MID = 0.7;
 
 /**
+ * A cor da grade naquela distância.
+ *
+ * Exportada porque tem dois leitores: a linha, que a usa como albedo e como
+ * brilho próprio do neon, e o chão entre as linhas, que a usa só como albedo —
+ * ele recebe luz, não emite. Duas tabelas se separariam na primeira mudança e o
+ * vão entre duas linhas deixaria de ser da cor delas.
+ */
+export const groundBand = (depth: number): Rgb => {
+  const fog = fogAmount(depth);
+  return fog < BAND_NEAR
+    ? COLOR.GRID_NEAR
+    : fog < BAND_MID
+      ? COLOR.GRID_MID
+      : COLOR.GRID_FAR;
+};
+
+/**
  * Quanto do fragmento a distância já comeu, de 0 (colado) a 1 (sumiu).
  *
  * Substitui as faixas por fileira de tela da versão anterior, que só
  * funcionavam porque o horizonte ficava sempre na mesma altura.
  */
 export const fogAmount = (depth: number): number => {
-    if (!settings.fogEnabled) return 0;
-    return Math.min(1, (depth / settings.viewDistance) * settings.fogDensity * 1.6);
+  if (!settings.fogEnabled) return 0;
+  return Math.min(
+    1,
+    (depth / settings.viewDistance) * settings.fogDensity * 1.6,
+  );
 };
 
-/** O glifo que a geometria pediria, antes de a luz opinar. */
-export const glyphForSlope = (slope: Slope, depth: number): number => {
-    switch (slope) {
-        case SLOPE.VERTICAL:
-            return GLYPH.PIPE;
-        case SLOPE.UP:
-            return GLYPH.SLASH;
-        case SLOPE.DOWN:
-            return GLYPH.BACKSLASH;
-        default:
-            // Perto, `_` assenta no chão; longe, `-` pesa menos.
-            return depth < settings.viewDistance * UNDERSCORE_RANGE
-                ? GLYPH.UNDERSCORE
-                : GLYPH.DASH;
-    }
-};
+/**
+ * O glifo que a geometria pediria, antes de a luz opinar.
+ *
+ * Casamento de forma (`glyphForLineShape`, `ramp.ts`) substitui os quatro
+ * baldes de inclinação de antes: a direção do segmento e onde exatamente ele
+ * cruza a célula (`offsetCol`/`offsetRow`, subcélula) resolvem entre
+ * diagonais, `|`, cantos de moldura e meios-bloco — resolução muito maior do
+ * que `VERTICAL/HORIZONTAL/UP/DOWN`. A única decisão que continua sendo de
+ * distância e não de forma é `_` contra `-`: perto, `_` assenta no chão;
+ * longe, `-` pesa menos — por isso o "near" que filtra o conjunto de
+ * candidatos, não a busca em si.
+ */
+export const geometricGlyph = (sample: SurfaceSample): number =>
+  glyphForLineShape(
+    sample.offsetCol,
+    sample.offsetRow,
+    sample.dirCol,
+    sample.dirRow,
+    sample.depth < settings.viewDistance * UNDERSCORE_RANGE,
+  );
 
-export const createMaterial = (overrides: Partial<Material> = {}): Material => ({
-    albedo: rgb(1, 1, 1),
-    emissive: rgb(),
-    emissiveStrength: 0,
-    reflectivity: 0,
-    gloss: 24,
-    mirror: false,
-    ...overrides,
+export const createMaterial = (
+  overrides: Partial<Material> = {},
+): Material => ({
+  albedo: rgb(1, 1, 1),
+  emissive: rgb(),
+  emissiveStrength: 0,
+  reflectivity: 0,
+  gloss: 24,
+  mirror: false,
+  ...overrides,
 });
 
 /**
@@ -60,14 +93,14 @@ export const createMaterial = (overrides: Partial<Material> = {}): Material => (
  * responder sempre a mesma coisa.
  */
 export interface LitContext {
-    world: LightWorld;
-    options: ShadeOptions;
-    cameraX: number;
-    cameraY: number;
-    cameraZ: number;
-    rampMode: typeof RAMP.CLASSIC | typeof RAMP.FAMILY | typeof RAMP.OFF;
-    rampExposure: number;
-    lit: boolean;
+  world: LightWorld;
+  options: ShadeOptions;
+  cameraX: number;
+  cameraY: number;
+  cameraZ: number;
+  rampMode: typeof RAMP.CLASSIC | typeof RAMP.FAMILY | typeof RAMP.OFF;
+  rampExposure: number;
+  lit: boolean;
 }
 
 /**
@@ -76,31 +109,37 @@ export interface LitContext {
  * quadro. `beginLit` troca pelo mundo de verdade antes do primeiro fragmento.
  */
 export const createLitContext = (): LitContext => ({
-    world: new LightWorld(),
-    options: { shadows: true, reflections: true, shadowThreshold: 0.004, maxShadowLights: 3 },
-    cameraX: 0,
-    cameraY: 0,
-    cameraZ: 0,
-    rampMode: RAMP.OFF,
-    rampExposure: 1.5,
-    lit: true,
+  world: new LightWorld(),
+  options: {
+    shadows: true,
+    reflections: true,
+    shadowThreshold: 0.004,
+    maxShadowLights: 3,
+    ambient: true,
+  },
+  cameraX: 0,
+  cameraY: 0,
+  cameraZ: 0,
+  rampMode: RAMP.OFF,
+  rampExposure: 1.5,
+  lit: true,
 });
 
 /** Uma vez por quadro, antes de o objeto emitir qualquer primitiva. */
 export const beginLit = (lit: LitContext, context: RenderContext): void => {
-    const { position } = context.camera;
-    lit.world = context.lights;
-    lit.options = context.shading;
-    lit.cameraX = position.x;
-    lit.cameraY = position.y;
-    lit.cameraZ = position.z;
-    lit.lit = settings.lightingEnabled;
-    lit.rampExposure = settings.rampExposure;
+  const { position } = context.camera;
+  lit.world = context.lights;
+  lit.options = context.shading;
+  lit.cameraX = position.x;
+  lit.cameraY = position.y;
+  lit.cameraZ = position.z;
+  lit.lit = settings.lightingEnabled;
+  lit.rampExposure = settings.rampExposure;
 
-    // Sem iluminação a rampa some junto: o glifo volta a ser só geometria, e a
-    // cena inteira volta a ser o que era antes de existir luz. É a referência
-    // com que qualquer efeito daqui para frente é comparado.
-    lit.rampMode = settings.lightingEnabled ? settings.glyphRamp : RAMP.OFF;
+  // Sem iluminação a rampa some junto: o glifo volta a ser só geometria, e a
+  // cena inteira volta a ser o que era antes de existir luz. É a referência
+  // com que qualquer efeito daqui para frente é comparado.
+  lit.rampMode = settings.lightingEnabled ? settings.glyphRamp : RAMP.OFF;
 };
 
 const shaded: Rgb = rgb();
@@ -115,10 +154,10 @@ const shaded: Rgb = rgb();
  * disso deixaria todo núcleo brilhante branco e sem estouro.
  */
 export const writeHdrColor = (out: Fragment, color: Rgb): void => {
-    const peak = Math.max(1, color.r, color.g, color.b);
-    const inverse = 1 / peak;
-    setRgb(out.color, color.r * inverse, color.g * inverse, color.b * inverse);
-    out.emissive = peak - 1;
+  const peak = Math.max(1, color.r, color.g, color.b);
+  const inverse = 1 / peak;
+  setRgb(out.color, color.r * inverse, color.g * inverse, color.b * inverse);
+  out.emissive = peak - 1;
 };
 
 /**
@@ -128,54 +167,82 @@ export const writeHdrColor = (out: Fragment, color: Rgb): void => {
  * não sabe o que é uma luz.
  */
 export const shadeFragment = (
-    lit: LitContext,
-    material: Material,
-    sample: SurfaceSample,
-    normalX: number,
-    normalY: number,
-    normalZ: number,
-    ownerId: number,
-    geometric: number,
-    out: Fragment,
+  lit: LitContext,
+  material: Material,
+  sample: SurfaceSample,
+  normalX: number,
+  normalY: number,
+  normalZ: number,
+  ownerId: number,
+  geometric: number,
+  texture: SurfaceTexture,
+  /**
+   * A linha está preenchendo uma área, e não desenhando uma aresta.
+   *
+   * Muda a rampa: uma aresta tem silhueta a preservar — é para isso que o modo
+   * por família existe —, e o interior de uma face não tem. Ali o traço é meio
+   * e não fim, e a rampa inteira da textura é o que descreve superfície.
+   */
+  area: boolean,
+  out: Fragment,
 ): void => {
-    if (!lit.lit) {
-        copyRgb(out.color, material.albedo);
-        out.emissive = material.emissiveStrength;
-        out.glyph = geometric;
-        return;
-    }
+  if (!lit.lit) {
+    copyRgb(out.color, material.albedo);
+    out.emissive = material.emissiveStrength;
+    out.glyph = geometric;
+    return;
+  }
 
-    // Do fragmento para a câmera. O sombreamento quer esta direção, e não a do
-    // olhar: é ela que entra no meio-vetor e no espelhamento.
-    let viewX = lit.cameraX - sample.x;
-    let viewY = lit.cameraY - sample.y;
-    let viewZ = lit.cameraZ - sample.z;
-    const distance = Math.sqrt(viewX * viewX + viewY * viewY + viewZ * viewZ);
-    if (distance > 0) {
-        viewX /= distance;
-        viewY /= distance;
-        viewZ /= distance;
-    }
+  // Do fragmento para a câmera. O sombreamento quer esta direção, e não a do
+  // olhar: é ela que entra no meio-vetor e no espelhamento.
+  let viewX = lit.cameraX - sample.x;
+  let viewY = lit.cameraY - sample.y;
+  let viewZ = lit.cameraZ - sample.z;
+  const distance = Math.sqrt(viewX * viewX + viewY * viewY + viewZ * viewZ);
+  if (distance > 0) {
+    viewX /= distance;
+    viewY /= distance;
+    viewZ /= distance;
+  }
 
-    const luminance = shadeSurface(
-        lit.world,
-        material,
-        sample.x, sample.y, sample.z,
-        normalX, normalY, normalZ,
-        viewX, viewY, viewZ,
-        ownerId,
-        lit.options,
-        shaded,
-    );
+  const luminance = shadeSurface(
+    lit.world,
+    material,
+    sample.x,
+    sample.y,
+    sample.z,
+    normalX,
+    normalY,
+    normalZ,
+    viewX,
+    viewY,
+    viewZ,
+    ownerId,
+    lit.options,
+    shaded,
+  );
 
-    writeHdrColor(out, shaded);
-    out.glyph = glyphForLuminance(
+  writeHdrColor(out, shaded);
+  out.glyph = area
+    ? glyphForPatch(
         luminance,
-        sample.slope,
+        lit.rampExposure,
+        texture,
+        sample.x,
+        sample.y,
+        sample.z,
+        1,
+      )
+    : glyphForLuminance(
+        luminance,
         geometric,
         lit.rampMode,
         lit.rampExposure,
-    );
+        texture,
+        sample.x,
+        sample.y,
+        sample.z,
+      );
 };
 
 /**
@@ -188,63 +255,96 @@ export const shadeFragment = (
  * inteiro — e nenhum dos dois pode ser alocado por fragmento.
  */
 export class SurfacePen {
-    readonly lit = createLitContext();
-    readonly material = createMaterial();
+  readonly lit = createLitContext();
+  readonly material = createMaterial();
 
-    /** Qual corpo emitiu esta superfície, para ela não se sombrear sozinha. */
-    ownerId = NO_OWNER;
+  /** Qual corpo emitiu esta superfície, para ela não se sombrear sozinha. */
+  ownerId = NO_OWNER;
 
-    /** A névoa dissolve esta superfície com a distância, como a grade. */
-    fogged = true;
+  /** A névoa dissolve esta superfície com a distância, como a grade. */
+  fogged = true;
 
-    /**
-     * Último ajuste antes de sombrear, por fragmento.
-     *
-     * É por onde o chão troca o albedo pela faixa de distância certa. Fica como
-     * gancho e não como caso especial dentro do estilo porque é a única coisa
-     * que o chão faz diferente de qualquer outra superfície.
-     */
-    beforeShade: ((sample: SurfaceSample, material: Material) => void) | null = null;
+  /**
+   * De que alfabeto de glifos as próximas linhas saem.
+   *
+   * Fica aqui e não no material pelo mesmo motivo que a normal: o material é
+   * transporte de luz, e `light/` não sabe o que é um glifo. Textura é a
+   * ponta de cá da ponte — luz virando caractere — e é exatamente o que esta
+   * caneta faz.
+   */
+  texture: SurfaceTexture = TEXTURE.SMOOTH;
 
-    private normalX = 0;
-    private normalY = 1;
-    private normalZ = 0;
+  /**
+   * As próximas linhas preenchem uma área, e não desenham uma aresta.
+   *
+   * Uma face sólida é feita de linhas — é a única primitiva que a engine tem —
+   * mas o que elas representam ali não é traço nenhum: é superfície. Com isto
+   * ligado a rampa inteira da textura entra no lugar da rampa por família, e o
+   * nível mais baixo deixa de ser o espaço, senão um pedaço escuro da face
+   * viraria buraco.
+   */
+  area = false;
 
-    /** Uma vez por quadro, antes de emitir qualquer primitiva. */
-    begin(context: RenderContext): void {
-        beginLit(this.lit, context);
-    }
+  /**
+   * Último ajuste antes de sombrear, por fragmento.
+   *
+   * É por onde o chão troca o albedo pela faixa de distância certa. Fica como
+   * gancho e não como caso especial dentro do estilo porque é a única coisa
+   * que o chão faz diferente de qualquer outra superfície.
+   */
+  beforeShade: ((sample: SurfaceSample, material: Material) => void) | null =
+    null;
 
-    /** A normal da face que as próximas linhas representam. */
-    normal(x: number, y: number, z: number): void {
-        this.normalX = x;
-        this.normalY = y;
-        this.normalZ = z;
-    }
+  private normalX = 0;
+  private normalY = 1;
+  private normalZ = 0;
 
-    readonly style: SurfaceStyle = (sample, out) => {
-        const fog = this.fogged ? fogAmount(sample.depth) : 0;
-        if (fog >= 1) return false;
+  /** Uma vez por quadro, antes de emitir qualquer primitiva. */
+  begin(context: RenderContext): void {
+    beginLit(this.lit, context);
+  }
 
-        this.beforeShade?.(sample, this.material);
+  /** A normal da face que as próximas linhas representam. */
+  normal(x: number, y: number, z: number): void {
+    this.normalX = x;
+    this.normalY = y;
+    this.normalZ = z;
+  }
 
-        shadeFragment(
-            this.lit,
-            this.material,
-            sample,
-            this.normalX, this.normalY, this.normalZ,
-            this.ownerId,
-            glyphForSlope(sample.slope, sample.depth),
-            out,
-        );
+  readonly style: SurfaceStyle = (sample, out) => {
+    const fog = this.fogged ? fogAmount(sample.depth) : 0;
+    if (fog >= 1) return false;
 
-        out.alpha = (1 - fog) ** 1.2;
+    this.beforeShade?.(sample, this.material);
 
-        // O nível mais baixo da rampa clássica é o espaço: a célula não some,
-        // ela fica vazia. Descartar aqui poupa a escrita e o teste de
-        // profundidade de algo que o shader descartaria por cobertura zero.
-        return out.glyph !== GLYPH.SPACE && out.glyph !== GLYPH.BLANK;
-    };
+    // O casamento de forma custa mais que o switch de 4 baldes de antes, e
+    // uma face preenchida sob luz normal nunca lê `geometric` (só a versão
+    // sem luz e a aresta leem) — pular a conta aqui é o que mantém milhares
+    // de fragmentos de hachura no orçamento de `sceneMs`.
+    const geometric =
+      this.area && this.lit.lit ? GLYPH.BLANK : geometricGlyph(sample);
+
+    shadeFragment(
+      this.lit,
+      this.material,
+      sample,
+      this.normalX,
+      this.normalY,
+      this.normalZ,
+      this.ownerId,
+      geometric,
+      this.texture,
+      this.area,
+      out,
+    );
+
+    out.alpha = (1 - fog) ** 1.2;
+
+    // O nível mais baixo da rampa clássica é o espaço: a célula não some,
+    // ela fica vazia. Descartar aqui poupa a escrita e o teste de
+    // profundidade de algo que o shader descartaria por cobertura zero.
+    return out.glyph !== GLYPH.SPACE && out.glyph !== GLYPH.BLANK;
+  };
 }
 
 /**
@@ -260,22 +360,20 @@ export class SurfacePen {
  * texture, e não o dithering que a versão em DOM precisava usar.
  */
 export const createGroundPen = (): SurfacePen => {
-    const pen = new SurfacePen();
-    pen.normal(0, 1, 0);
-    pen.beforeShade = (sample, material) => {
-        const fog = fogAmount(sample.depth);
-        const band =
-            fog < BAND_NEAR ? COLOR.GRID_NEAR : fog < BAND_MID ? COLOR.GRID_MID : COLOR.GRID_FAR;
+  const pen = new SurfacePen();
+  pen.normal(0, 1, 0);
+  pen.beforeShade = (sample, material) => {
+    const band = groundBand(sample.depth);
 
-        copyRgb(material.albedo, band);
+    copyRgb(material.albedo, band);
 
-        // A linha brilha na própria cor: é neon, não asfalto. A luz das outras
-        // fontes soma por cima, e é a soma que a rampa lê para escolher o
-        // caractere.
-        copyRgb(material.emissive, band);
-        material.emissiveStrength = settings.gridGlow;
-        material.reflectivity = settings.groundReflectivity;
-        material.gloss = settings.groundGloss;
-    };
-    return pen;
+    // A linha brilha na própria cor: é neon, não asfalto. A luz das outras
+    // fontes soma por cima, e é a soma que a rampa lê para escolher o
+    // caractere.
+    copyRgb(material.emissive, band);
+    material.emissiveStrength = settings.gridGlow;
+    material.reflectivity = settings.groundReflectivity;
+    material.gloss = settings.groundGloss;
+  };
+  return pen;
 };

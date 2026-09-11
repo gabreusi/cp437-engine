@@ -1,4 +1,4 @@
-import type { Rgb } from '../math/color';
+import type { Rgb } from "../math/color";
 
 /**
  * Grade de células em dois planos, no formato que a GPU consome direto.
@@ -45,64 +45,79 @@ const DEPTH_TOLERANCE = 1e-3;
 export const EMISSIVE_RANGE = 4;
 
 const toByte = (value: number): number =>
-    value <= 0 ? 0 : value >= 1 ? 255 : (value * 255 + 0.5) | 0;
+  value <= 0 ? 0 : value >= 1 ? 255 : (value * 255 + 0.5) | 0;
 
 export class Framebuffer {
-    readonly cells: Uint8Array;
-    readonly colors: Uint8Array;
-    private readonly depth: Float32Array;
+  readonly cells: Uint8Array;
+  readonly colors: Uint8Array;
+  private readonly depth: Float32Array;
 
-    constructor(
-        readonly colCount: number,
-        readonly rowCount: number,
-    ) {
-        const cells = colCount * rowCount;
-        this.cells = new Uint8Array(cells * 4);
-        this.colors = new Uint8Array(cells * 4);
-        this.depth = new Float32Array(cells);
-        this.clear();
-    }
+  constructor(
+    readonly colCount: number,
+    readonly rowCount: number,
+  ) {
+    const cells = colCount * rowCount;
+    this.cells = new Uint8Array(cells * 4);
+    this.colors = new Uint8Array(cells * 4);
+    this.depth = new Float32Array(cells);
+    this.clear();
+  }
 
-    /** Zerar já significa "célula vazia": alpha zero é descartado no shader. */
-    clear(): void {
-        this.cells.fill(0);
-        this.colors.fill(0);
-        this.depth.fill(Infinity);
-    }
+  /** Zerar já significa "célula vazia": alpha zero é descartado no shader. */
+  clear(): void {
+    this.cells.fill(0);
+    this.colors.fill(0);
+    this.depth.fill(Infinity);
+  }
 
-    /**
-     * Escreve uma célula se ela estiver mais perto do que o que já está lá.
-     *
-     * O teste rejeita só o que está mais longe além da tolerância; com o buffer
-     * inicializado em infinito, isso também deixa o céu — que tem profundidade
-     * infinita — escrever numa célula ainda vazia.
-     */
-    plot(
-        col: number,
-        row: number,
-        glyph: number,
-        color: Rgb,
-        depth: number,
-        alpha = 1,
-        emissive = 0,
-    ): void {
-        if (col < 0 || col >= this.colCount || row < 0 || row >= this.rowCount) return;
+  /**
+   * Nada foi escrito nesta célula neste quadro.
+   *
+   * Lê o alpha, e não a profundidade: o buffer nasce com profundidade
+   * infinita, mas o céu também escreve com profundidade infinita — só o alpha
+   * separa "vazio" de "longe". É o que deixa o preenchimento do chão trabalhar
+   * apenas nos vãos entre as linhas, em vez de apagá-las.
+   */
+  isEmpty(col: number, row: number): boolean {
+    if (col < 0 || col >= this.colCount || row < 0 || row >= this.rowCount)
+      return false;
+    return this.cells[(row * this.colCount + col) * 4 + 1] === 0;
+  }
 
-        const index = row * this.colCount + col;
-        const current = this.depth[index]!;
-        if (depth > current + Math.abs(current) * DEPTH_TOLERANCE) return;
+  /**
+   * Escreve uma célula se ela estiver mais perto do que o que já está lá.
+   *
+   * O teste rejeita só o que está mais longe além da tolerância; com o buffer
+   * inicializado em infinito, isso também deixa o céu — que tem profundidade
+   * infinita — escrever numa célula ainda vazia.
+   */
+  plot(
+    col: number,
+    row: number,
+    glyph: number,
+    color: Rgb,
+    depth: number,
+    alpha = 1,
+    emissive = 0,
+  ): void {
+    if (col < 0 || col >= this.colCount || row < 0 || row >= this.rowCount)
+      return;
 
-        this.depth[index] = depth;
+    const index = row * this.colCount + col;
+    const current = this.depth[index]!;
+    if (depth > current + Math.abs(current) * DEPTH_TOLERANCE) return;
 
-        const offset = index * 4;
-        this.cells[offset] = glyph;
-        this.cells[offset + 1] = toByte(alpha);
-        this.cells[offset + 2] = toByte(emissive / EMISSIVE_RANGE);
-        this.cells[offset + 3] = 255;
+    this.depth[index] = depth;
 
-        this.colors[offset] = toByte(color.r);
-        this.colors[offset + 1] = toByte(color.g);
-        this.colors[offset + 2] = toByte(color.b);
-        this.colors[offset + 3] = 255;
-    }
+    const offset = index * 4;
+    this.cells[offset] = glyph;
+    this.cells[offset + 1] = toByte(alpha);
+    this.cells[offset + 2] = toByte(emissive / EMISSIVE_RANGE);
+    this.cells[offset + 3] = 255;
+
+    this.colors[offset] = toByte(color.r);
+    this.colors[offset + 1] = toByte(color.g);
+    this.colors[offset + 2] = toByte(color.b);
+    this.colors[offset + 3] = 255;
+  }
 }
