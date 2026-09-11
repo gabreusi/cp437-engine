@@ -12,6 +12,7 @@ import { Camera } from "./render/camera";
 import { drawDebugPattern } from "./render/debug-pattern";
 import { countByColor, dumpGlyphs } from "./render/debug-dump";
 import { Framebuffer } from "./render/framebuffer";
+import { ensureFontLoaded } from "./render/gl/atlas";
 import { GlPresenter } from "./render/gl/presenter";
 import { createProjected, Rasterizer } from "./render/rasterizer";
 import {
@@ -33,6 +34,14 @@ import { Ground } from "./scene/ground";
 
 const canvas = requireElement<HTMLCanvasElement>("canvas");
 const presenter = new GlPresenter(canvas);
+
+// O primeiro atlas quase sempre desenha antes da BIOS terminar de carregar
+// (ver `ensureFontLoaded`); assim que ela chega, o atlas é refeito com a
+// fonte certa. `catch` cobre a fonte não existir — o atlas fica no fallback,
+// que é melhor que travar a engine.
+void ensureFontLoaded()
+  .catch(() => undefined)
+  .then(() => presenter.refreshAtlas());
 
 const camera = new Camera();
 const rasterizer = new Rasterizer();

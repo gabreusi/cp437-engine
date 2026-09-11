@@ -4,10 +4,26 @@ import { CELL_ASPECT } from "../viewport";
 /** Colunas no atlas. Com 128 glifos, o atlas fecha em oito fileiras exatas. */
 export const ATLAS_COLS = 16;
 
-const FONT_STACK = '"Courier New", Consolas, "DejaVu Sans Mono", monospace';
+const OLDSCHOOL_FONT: Boolean = false;
+
+const BIOS_FAMILY = "BIOS";
+
+const FONT_STACK = `"${OLDSCHOOL_FONT ? BIOS_FAMILY : ""}", "Courier New", Consolas, "DejaVu Sans Mono", monospace`;
 
 /** Largura de célula onde a fonte é medida; a escala final é proporcional. */
 const MEASURE_SIZE = 100;
+
+/**
+ * Espera a BIOS carregar antes de qualquer atlas medir texto nela.
+ *
+ * `@font-face` só busca o arquivo quando algo pede a fonte, e o pedido do
+ * `ctx.font` do atlas não conta para o navegador — só layout de DOM dispara
+ * isso. Sem esperar aqui, o primeiro atlas mede com a fonte de fallback e fica
+ * assim para sempre: `buildGlyphAtlas` só roda de novo se a célula mudar de
+ * tamanho, nunca porque uma fonte terminou de carregar.
+ */
+export const ensureFontLoaded = (): Promise<FontFace[]> =>
+  document.fonts.load(`${MEASURE_SIZE}px "${BIOS_FAMILY}"`);
 
 const MIN_CELL = 6;
 

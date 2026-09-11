@@ -128,10 +128,10 @@ export const settings: Settings = {
   rampExposure: 0.75,
   maxShadowLights: 3,
 
-  bloomIntensity: 0.2,
-  bloomRadius: 1.6,
-  scanlineStrength: 0.1,
-  vignetteStrength: 0.35,
+  bloomIntensity: 0.1,
+  bloomRadius: 1.2,
+  scanlineStrength: 0.05,
+  vignetteStrength: 0.15,
 };
 
 export const CANVAS_BACKGROUND = "#05000e";

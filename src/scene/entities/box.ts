@@ -122,6 +122,24 @@ export class BoxShape {
     return out;
   }
 
+  /**
+   * Ponto de mundo levado para o local — o caminho inverso de `toWorldPoint`.
+   *
+   * `toLocal` já é a rotação de mundo para local (é o que `setView` monta);
+   * usar `transformDirection` sem transpor desfaz exatamente essa rotação.
+   * É o que deixa `facesCamera` responder "a câmera está dentro da caixa?"
+   * sem precisar dos oito cantos.
+   */
+  toLocalPoint(x: number, y: number, z: number, out: Vec3): Vec3 {
+    return mat4.transformDirection(
+      out,
+      this.toLocal,
+      x - this.center.x,
+      y - this.center.y,
+      z - this.center.z,
+    );
+  }
+
   get edges(): readonly BoxEdge[] {
     return EDGES;
   }

@@ -22,67 +22,62 @@ import type { BoxShape } from "./box";
 /**
  * Folga entre linhas da hachura, em células de tela.
  *
- * Um significa "linhas vizinhas em células vizinhas", que é a condição exata
- * para não sobrar buraco. Abaixo de um seria desenhar duas vezes na mesma
- * célula; acima, a face deixa de ser opaca e se enxerga através dela.
+ * Não é 1. Duas faixas vizinhas são duas retas independentes: o DDA do
+ * rasterizador (`Rasterizer.drawScreenLine`) decide os próprios passos pelo
+ * comprimento *daquela* reta, não em sincronia com a vizinha, então os pontos
+ * que cada uma efetivamente marca não caem nas mesmas frações de `u`. Um vão
+ * *contínuo* — a distância que esta subdivisão mede — de uma célula inteira
+ * não garante célula vizinha depois que os dois lados arredondam (`Math.round`)
+ * cada um para o seu canto: a folga tem que cobrir esse desalinhamento de fase,
+ * não só o vão em si. 0.2 é o valor que fechou o caso mais raso testado — um
+ * painel quase de perfil, perto — sem abrir buraco; acima de ~0.5 ele reabre.
  */
-const SPACING_CELLS = 1;
+const SPACING_CELLS = 0.2;
 
 /**
- * Teto de linhas, como múltiplo da altura da janela em fileiras.
+ * Teto de faixas por face — rede de segurança, não o mecanismo principal.
  *
- * O limite real é a tela: uma face não pode precisar de muito mais linhas do
- * que a janela tem fileiras. A folga de três existe porque a hachura é
- * distribuída pela face inteira, e uma face maior que a tela gasta boa parte
- * das linhas fora dela — a folga é o que mantém a parte visível fechada.
- * Amarrar o teto ao viewport, e não a um número fixo, é o que impede o custo de
- * acompanhar o tamanho da face em unidades de mundo.
+ * A densidade real vem da subdivisão adaptativa logo abaixo, que só quebra um
+ * intervalo enquanto o vão medido *na tela* passa de uma célula. Este teto só
+ * existe para o caso patológico de a câmera estar dentro da própria face — o
+ * near plane corta as arestas o tempo todo, a distância nunca fica confiável,
+ * e sem um teto o laço giraria para sempre.
  */
-const MAX_SCREENS = 3;
+const MAX_SUBDIVISIONS = 4096;
+
+/**
+ * Quantos pontos ao longo de `u` entram na medida do vão entre duas faixas.
+ *
+ * Duas não bastam. O vão entre a faixa em `vA` e a faixa em `vB`, como função
+ * de `u`, é uma razão de um polinômio linear por um quadrático sempre
+ * positivo — álgebra, não intuição: a profundidade de cada aresta é afim em
+ * `u`, a diferença de duas projeções com denominadores diferentes cancela os
+ * termos cruzados e sobra grau 1 sobre grau 2. Essa forma pode crescer no
+ * meio do intervalo e cair de novo nas duas pontas — um bojo — e é isso que
+ * media só as bordas (`u = ±halfU`) deixava passar: as duas bordas mediam
+ * folga, o bojo no meio da face não, e dava para ver através do objeto bem
+ * no centro dela, olhando de perto e em ângulo composto (inclinado nos dois
+ * eixos ao mesmo tempo — o caso que faz as duas coordenadas de tela mudarem
+ * junto). Amostrar o meio além das bordas não prova nada por si, mas um bojo
+ * de grau 1/2 não tem espaço para outro pico escondido entre três amostras
+ * igualmente espaçadas na prática, e o custo extra é só mais duas projeções.
+ */
+const U_SAMPLES = 5;
 
 // Rascunhos: isto roda por face, por objeto, por quadro.
 const start: Vec3 = vec3();
 const end: Vec3 = vec3();
 const normal: Vec3 = vec3();
-const firstEnd: Projected = createProjected();
-const lastEnd: Projected = createProjected();
-
-/**
- * O que a última medição de aresta encontrou.
- *
- * Fora da função pelo mesmo motivo que os vetores acima: devolver um objeto
- * seria alocar uma vez por face, por objeto, por quadro.
- */
-let edgeSpan = 0;
-let edgeNearDepth = 1;
-let edgeFarDepth = 1;
-
-/**
- * O ponto da aresta que cai a `screen` do caminho *na tela*, como fração do
- * comprimento dela em mundo.
- *
- * É a correção que faltava, e é a mesma regra que o rasterizador já segue para
- * profundidade e posição de mundo: o que é linear em espaço de tela é `1/w`, não
- * `w`. Distribuir as faixas uniformemente em espaço de mundo — que é o que esta
- * hachura fazia — só dá espaçamento uniforme na tela quando a face está de
- * frente. De esguelha, a metade próxima da face ocupa a maior parte da tela com
- * metade das faixas, e o vão entre elas passa de uma célula: é assim que se
- * enxerga através de um corpo sólido, e só nos ângulos.
- *
- * Com a correção, a contagem continua sendo o comprimento em células e o
- * espaçamento sai uniforme em qualquer ângulo — nenhuma linha a mais para
- * fechar o buraco.
- */
-const perspective = (
-  screen: number,
-  nearDepth: number,
-  farDepth: number,
-): number => {
-  if (nearDepth === farDepth) return screen;
-  // Invertendo `s = (1/w - 1/w0) / (1/w1 - 1/w0)`, que é a interpolação em
-  // `1/w` resolvida para o parâmetro de mundo.
-  return (screen * nearDepth) / (farDepth - screen * (farDepth - nearDepth));
-};
+const curSamples: Projected[] = [];
+const nextSamples: Projected[] = [];
+const curValid: boolean[] = [];
+const nextValid: boolean[] = [];
+for (let i = 0; i < U_SAMPLES; i += 1) {
+  curSamples.push(createProjected());
+  nextSamples.push(createProjected());
+  curValid.push(false);
+  nextValid.push(false);
+}
 
 /** Meia-extensão da caixa naquele eixo. */
 const halfOn = (half: Vec3, axis: number): number =>
@@ -114,42 +109,104 @@ const localPoint = (
 };
 
 /**
- * Mede uma aresta transversal: quanto ela ocupa na tela e a que profundidade
- * cada ponta caiu.
+ * Projeta `U_SAMPLES` pontos ao longo de `u`, num dado `v`, recortando cada
+ * um ao retângulo da tela. Marca em `outValid` quais pontas realmente
+ * projetaram, e devolve quantas foram.
  *
- * A profundidade entra porque o espaçamento das faixas não pode ser decidido só
- * pelo comprimento: veja `hatchFace`. `false` quando alguma ponta está atrás do
- * near plane — a face está colada na câmera, e densidade máxima é a resposta
- * certa.
+ * Uma ponta não projeta (`rasterizer.project` devolve `false`) tanto perto do
+ * near plane quanto simplesmente *atrás* da câmera — e a segunda é comum aqui:
+ * `u` varre a largura inteira da face em passos fixos, e numa face grande
+ * vista de um ângulo aberto (o painel, bem mais largo que fundo) a ponta
+ * extrema pode cair fora do hemisfério da câmera enquanto o resto da face —
+ * inclusive o `v` sendo medido — está perfeitamente visível. Se uma falha
+ * dessas derrubasse a amostra inteira, `hatchFace` trataria a linha toda como
+ * "sem medida confiável" e cairia no menor passo possível para a face inteira,
+ * sem nunca voltar a andar rápido — exatamente a metade que ficava sem
+ * hachura. Cada ponta é independente: as que falham somem da comparação (ver
+ * `maxChebyshev`), e só quando *nenhuma* projeta é que a linha é mesmo
+ * inconfiável.
  *
- * A métrica do comprimento é Chebyshev, e não euclidiana, porque a pergunta é
- * sobre células e não sobre pixels: duas faixas sem vão são duas faixas que não
- * pulam nenhuma coluna nem nenhuma fileira.
+ * O recorte por coordenada (não é o Liang-Barsky exato do rasterizador, só um
+ * clamp) existe para não gastar o orçamento de subdivisão medindo vão entre
+ * pontos que estão todos fora da tela: uma face colada na câmera pode ter a
+ * maior parte de si mesma fora do campo de visão, e sem o recorte o vão ali
+ * mediria centenas de células — muito além do teto — e comeria a verba que a
+ * parte visível precisa.
  */
-const measureEdge = (
+const projectSamples = (
   shape: BoxShape,
   rasterizer: Rasterizer,
+  colCount: number,
+  rowCount: number,
   axis: number,
   depth: number,
   uAxis: number,
-  u: number,
+  halfU: number,
   vAxis: number,
-  halfV: number,
-): boolean => {
-  localPoint(shape, axis, depth, uAxis, u, vAxis, -halfV, start);
-  if (!rasterizer.project(start.x, start.y, start.z, firstEnd)) return false;
-
-  localPoint(shape, axis, depth, uAxis, u, vAxis, halfV, end);
-  if (!rasterizer.project(end.x, end.y, end.z, lastEnd)) return false;
-
-  edgeSpan = Math.max(
-    Math.abs(lastEnd.col - firstEnd.col),
-    Math.abs(lastEnd.row - firstEnd.row),
-  );
-  edgeNearDepth = firstEnd.depth;
-  edgeFarDepth = lastEnd.depth;
-  return true;
+  v: number,
+  out: Projected[],
+  outValid: boolean[],
+): number => {
+  let validCount = 0;
+  for (let i = 0; i < U_SAMPLES; i += 1) {
+    const u = -halfU + (2 * halfU * i) / (U_SAMPLES - 1);
+    localPoint(shape, axis, depth, uAxis, u, vAxis, v, start);
+    const point = out[i]!;
+    const ok = rasterizer.project(start.x, start.y, start.z, point);
+    outValid[i] = ok;
+    if (!ok) continue;
+    validCount += 1;
+    point.col = Math.min(Math.max(point.col, 0), colCount);
+    point.row = Math.min(Math.max(point.row, 0), rowCount);
+  }
+  return validCount;
 };
+
+/**
+ * Maior vão em células — Chebyshev, e não euclidiano, pelo mesmo motivo de
+ * sempre: a pergunta é sobre células, não pixels.
+ *
+ * Só compara amostras válidas dos dois lados: uma ponta que não projetou não
+ * participa, em vez de contaminar a linha inteira (ver `projectSamples`).
+ * `null` quando nenhum par de amostras é comparável — sem distância
+ * confiável, e quem chama trata como vão infinito.
+ */
+const maxChebyshev = (
+  a: Projected[],
+  aValid: boolean[],
+  b: Projected[],
+  bValid: boolean[],
+): number | null => {
+  let worst = -1;
+  for (let i = 0; i < U_SAMPLES; i += 1) {
+    if (!aValid[i] || !bValid[i]) continue;
+    const pa = a[i]!;
+    const pb = b[i]!;
+    const gap = Math.max(Math.abs(pa.col - pb.col), Math.abs(pa.row - pb.row));
+    if (gap > worst) worst = gap;
+  }
+  return worst < 0 ? null : worst;
+};
+
+const copySamples = (
+  dst: Projected[],
+  dstValid: boolean[],
+  src: Projected[],
+  srcValid: boolean[],
+): void => {
+  for (let i = 0; i < U_SAMPLES; i += 1) {
+    dstValid[i] = srcValid[i]!;
+    if (!srcValid[i]) continue;
+    const d = dst[i]!;
+    const s = src[i]!;
+    d.col = s.col;
+    d.row = s.row;
+    d.depth = s.depth;
+  }
+};
+
+/** Rascunho da posição da câmera em espaço local da caixa (ver `facesCamera`). */
+const localCamera: Vec3 = vec3();
 
 /**
  * A face está virada para a câmera.
@@ -157,6 +214,16 @@ const measureEdge = (
  * Não é só economia: as faces de trás caem à mesma profundidade das da frente
  * dentro da tolerância do z-buffer, e desenhá-las deixaria metade das células
  * decidida por ordem de desenho em vez de por distância.
+ *
+ * `true` também quando a câmera está *dentro* da caixa — nos três eixos ao
+ * mesmo tempo, em espaço local. Sem isso, um jogador que chega perto o
+ * bastante para entrar na pegada da base (o chão não tem colisão) faz esse
+ * teste falhar nas seis faces de uma vez: cada face sozinha está "atrás" da
+ * câmera, então nenhuma desenha, e sobra só o wireframe das arestas — o
+ * mesmo sintoma de ver através do objeto que a hachura corrigiu, só que
+ * agora por culling em vez de densidade. Cá dentro não há como saber qual
+ * face você veria de fora, então a resposta seguinta é desenhar todas: pior
+ * a sombra errada numa face de esguelha do que nenhuma face.
  */
 export const facesCamera = (
   shape: BoxShape,
@@ -168,6 +235,15 @@ export const facesCamera = (
   cameraY: number,
   cameraZ: number,
 ): boolean => {
+  shape.toLocalPoint(cameraX, cameraY, cameraZ, localCamera);
+  if (
+    Math.abs(localCamera.x) <= half.x &&
+    Math.abs(localCamera.y) <= half.y &&
+    Math.abs(localCamera.z) <= half.z
+  ) {
+    return true;
+  }
+
   shape.toWorldDirection(
     axis === 0 ? sign : 0,
     axis === 1 ? sign : 0,
@@ -186,14 +262,28 @@ export const facesCamera = (
 };
 
 /**
- * Preenche uma face com linhas paralelas, com densidade decidida na tela.
+ * Preenche uma face com linhas paralelas, subdividindo até que o vão entre
+ * duas faixas vizinhas — medido em vários pontos ao longo delas, na tela —
+ * não passe de uma célula.
  *
- * Contar linhas por unidade de mundo — que é o que a primeira versão do painel
- * fazia — erra nas duas pontas: de longe desenha vinte linhas que caem nas
- * mesmas três fileiras, e de perto deixa uma fileira vazia entre cada duas, e
- * uma superfície que se enxerga através não é uma superfície. A medida é feita
- * nas duas arestas transversais e vale a maior: com a face inclinada, a aresta
- * próxima é a que abre buraco primeiro.
+ * A versão anterior tentava prever essa densidade com uma fórmula fechada:
+ * contava as faixas pelo comprimento em células de uma única aresta
+ * transversal e distribuía o resto por interpolação em `1/w`, a mesma regra
+ * que profundidade e posição de mundo seguem em espaço de tela. Isso supõe
+ * que a posição na tela varia proporcionalmente a `1/w`, o que só é exato
+ * quando a outra coordenada de tela não muda com `v` — falha numa face
+ * inclinada nos dois eixos ao mesmo tempo. Uma versão seguinte trocou a
+ * fórmula por medida direta, mas só nas duas bordas (`u = ±halfU`): o vão
+ * entre duas faixas, como função de `u`, pode ter um bojo no meio que as
+ * bordas sozinhas não veem (ver `U_SAMPLES`) — o mesmo ângulo composto, buraco
+ * bem no centro da face em vez de na borda.
+ *
+ * A subdivisão adaptativa não supõe nada sobre a forma da curva: mede a
+ * distância de verdade em várias amostras ao longo da faixa e só aceita o
+ * passo quando todas cabem numa célula, subdividindo ao meio quando alguma
+ * não cabe. Custa mais projeções por face, mas cada uma é barata, e a maioria
+ * das faces — de frente, ou moderadamente inclinadas — fecha em um ou dois
+ * passos.
  */
 export const hatchFace = (
   shape: BoxShape,
@@ -203,7 +293,8 @@ export const hatchFace = (
   sign: number,
   pen: SurfacePen,
 ): void => {
-  const { rasterizer } = context;
+  const { rasterizer, viewport } = context;
+  const { colCount, rowCount } = viewport;
 
   // Os dois eixos que sobram, em ordem cíclica: `u` é o comprimento da linha,
   // `v` a direção em que elas se empilham.
@@ -232,43 +323,78 @@ export const hatchFace = (
     rasterizer.line(start.x, start.y, start.z, end.x, end.y, end.z, pen.style);
   };
 
-  const maxRows = context.viewport.rowCount * MAX_SCREENS;
+  const span = halfV * 2;
+  const minStep = span / MAX_SUBDIVISIONS;
 
-  // Vale a aresta que ocupa mais tela: é ela que abre vão primeiro, e é o
-  // perfil de profundidade dela que descreve a perspectiva desta face.
-  let rows = maxRows;
-  let nearDepth = 1;
-  let farDepth = 1;
+  let v = -halfV;
+  stripe(v);
+  let curValidCount = projectSamples(
+    shape,
+    rasterizer,
+    colCount,
+    rowCount,
+    axis,
+    depth,
+    uAxis,
+    halfU,
+    vAxis,
+    v,
+    curSamples,
+    curValid,
+  );
 
-  let span = -1;
-  if (
-    measureEdge(shape, rasterizer, axis, depth, uAxis, -halfU, vAxis, halfV)
-  ) {
-    span = edgeSpan;
-    nearDepth = edgeNearDepth;
-    farDepth = edgeFarDepth;
-  }
-  if (
-    measureEdge(shape, rasterizer, axis, depth, uAxis, halfU, vAxis, halfV) &&
-    edgeSpan > span
-  ) {
-    span = edgeSpan;
-    nearDepth = edgeNearDepth;
-    farDepth = edgeFarDepth;
+  // Salto adaptativo: dobra o passo a cada acerto, reduz à metade a cada
+  // recusa. Começa tentando a face inteira de uma vez — é o caminho comum, e
+  // fecha em um só passo quando a face está de frente ou moderadamente longe.
+  let step = span;
+
+  for (let guard = 0; guard < MAX_SUBDIVISIONS && v < halfV - 1e-9; guard += 1) {
+    const candidate = Math.min(v + step, halfV);
+    const validCount = projectSamples(
+      shape,
+      rasterizer,
+      colCount,
+      rowCount,
+      axis,
+      depth,
+      uAxis,
+      halfU,
+      vAxis,
+      candidate,
+      nextSamples,
+      nextValid,
+    );
+
+    // `null` quando nenhuma amostra dos dois lados coincide (ver
+    // `maxChebyshev`): sem distância confiável, trata como vão infinito, o
+    // que força subdivisão até o passo mínimo — a resposta certa para uma
+    // face colada no near plane. Mas só quando pelo menos um dos dois lados
+    // tem alguma amostra válida: se os dois lados são totalmente inválidos —
+    // a ponta inteira atrás da câmera, não só perto do near plane —, não há
+    // nada visível entre eles para medir, e forçar o passo mínimo aqui é o
+    // que fazia a face desperdiçar o orçamento inteiro atravessando, de
+    // milímetro em milímetro, a metade da altura que ficou para trás quando a
+    // câmera sobe acima do meio do objeto: a metade visível, lá na frente,
+    // nunca chegava a receber uma única faixa.
+    const bothInvisible = curValidCount === 0 && validCount === 0;
+    const gap = bothInvisible ? 0 : (maxChebyshev(curSamples, curValid, nextSamples, nextValid) ?? Infinity);
+
+    if (gap <= SPACING_CELLS || candidate - v <= minStep) {
+      stripe(candidate);
+      v = candidate;
+      curValidCount = validCount;
+      if (validCount > 0) {
+        copySamples(curSamples, curValid, nextSamples, nextValid);
+      } else {
+        curValid.fill(false);
+      }
+      step *= 2;
+    } else {
+      step *= 0.5;
+    }
   }
 
-  if (span >= 0) {
-    rows = Math.min(maxRows, Math.max(1, Math.ceil(span / SPACING_CELLS)));
-  } else {
-    // Nenhuma ponta projetou: a face está atravessando o near plane. Sem
-    // perspectiva conhecida, a distribuição volta a ser linear.
-    nearDepth = 1;
-    farDepth = 1;
-  }
-
-  for (let index = 0; index <= rows; index += 1) {
-    stripe(-halfV + perspective(index / rows, nearDepth, farDepth) * halfV * 2);
-  }
+  if (v < halfV) stripe(halfV);
 
   pen.area = false;
 };

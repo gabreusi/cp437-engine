@@ -12,6 +12,18 @@ import { RenderTarget } from "./target";
 
 export type { Atmosphere };
 
+/** Substitui o atlas por um novo, liberando o anterior. */
+const rebuildGlyphAtlas = (
+  gl: WebGL2RenderingContext,
+  cellWidth: number,
+  previous: GlyphAtlas | null,
+): GlyphAtlas => {
+  if (previous !== null) gl.deleteTexture(previous.texture);
+  const atlas = buildGlyphAtlas(gl, cellWidth);
+  updateGlyphShapeTable(atlas);
+  return atlas;
+};
+
 /**
  * Onde o framebuffer da CPU vira pixels.
  *
@@ -110,11 +122,30 @@ export class GlPresenter implements Presenter {
 
     const cellWidth = atlasCellWidthFor(viewport.cellWidth * viewport.dpr);
     if (resources.atlas === null || cellWidth !== resources.atlasCellWidth) {
-      if (resources.atlas !== null) gl.deleteTexture(resources.atlas.texture);
-      resources.atlas = buildGlyphAtlas(gl, cellWidth);
+      resources.atlas = rebuildGlyphAtlas(gl, cellWidth, resources.atlas);
       resources.atlasCellWidth = cellWidth;
-      updateGlyphShapeTable(resources.atlas);
     }
+    resources.grid.setAtlas(resources.atlas);
+  }
+
+  /**
+   * Refaz o atlas com o tamanho de célula atual.
+   *
+   * `resize` só reconstrói quando a célula muda de tamanho — o gatilho certo
+   * para a maioria dos casos, mas cego a uma fonte que termina de carregar
+   * depois do primeiro atlas já ter sido desenhado com o fallback. Quem chama
+   * isso é `ensureFontLoaded().then(...)`, uma vez, em `main.ts`.
+   */
+  refreshAtlas(): void {
+    const resources = this.resources;
+    const viewport = this.viewport;
+    if (this.context.isLost || resources === null || viewport === null)
+      return;
+
+    const { gl } = this.context;
+    const cellWidth = atlasCellWidthFor(viewport.cellWidth * viewport.dpr);
+    resources.atlas = rebuildGlyphAtlas(gl, cellWidth, resources.atlas);
+    resources.atlasCellWidth = cellWidth;
     resources.grid.setAtlas(resources.atlas);
   }
 
