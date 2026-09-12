@@ -1,6 +1,6 @@
-import { EMISSIVE_RANGE, type Framebuffer } from '../../framebuffer';
-import type { GlyphAtlas } from '../atlas';
-import { Program } from '../program';
+import { EMISSIVE_RANGE, type Framebuffer } from "../../framebuffer";
+import type { GlyphAtlas } from "../atlas";
+import { Program } from "../program";
 
 /**
  * Triângulo que cobre a tela inteira, gerado a partir do `gl_VertexID`.
@@ -47,116 +47,147 @@ void main() {
     float alpha = data.g;
     if (alpha <= 0.0) discard;
 
+    vec4 colorData = texelFetch(uGridColor, cell, 0);
+    // Marca de Framebuffer.plot: corpo sólido (hachura de face), não
+    // traço. Ver o comentário lá — sem ela o vão entre a tinta de um glifo
+    // escuro deixaria passar o que está atrás de um corpo opaco.
+    bool opaque = colorData.a > 0.5;
+
     int glyph = int(data.r * 255.0 + 0.5);
     int atlasCols = int(uAtlasGrid.x);
     vec2 glyphCell = vec2(float(glyph % atlasCols), float(glyph / atlasCols));
     vec2 atlasUv = (glyphCell + fract(gridPos)) / uAtlasGrid;
 
     float coverage = texture(uAtlas, atlasUv).a;
-    if (coverage <= 0.0) discard;
+    if (coverage <= 0.0 && !opaque) discard;
 
     // O emissivo é o que deixa a célula passar de 1.0 e virar halo no bloom,
     // que não tem bright-pass: quem estoura é quem brilha.
-    vec3 rgb = texelFetch(uGridColor, cell, 0).rgb;
-    rgb *= 1.0 + data.b * uEmissiveRange;
+    vec3 rgb = colorData.rgb * (1.0 + data.b * uEmissiveRange);
 
-    fragColor = vec4(rgb, coverage * alpha);
+    // Traço (linha de grade, estrela, aresta) continua sendo tinta sobre o
+    // vazio: o vão entre os traços do glifo deixa passar o que está atrás,
+    // de propósito. Corpo sólido bloqueia sempre — coberto pela tinta ou
+    // não —, senão a face escura de um objeto vira janela para o céu.
+    float finalAlpha = opaque ? alpha : coverage * alpha;
+    vec3 finalRgb = (opaque && coverage <= 0.0) ? vec3(0.0) : rgb;
+
+    fragColor = vec4(finalRgb, finalAlpha);
 }`;
 
 const createDataTexture = (
-    gl: WebGL2RenderingContext,
-    width: number,
-    height: number,
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
 ): WebGLTexture => {
-    const texture = gl.createTexture();
-    if (texture === null) throw new Error('Não foi possível criar a textura de dados.');
+  const texture = gl.createTexture();
+  if (texture === null)
+    throw new Error("Não foi possível criar a textura de dados.");
 
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    return texture;
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return texture;
 };
 
 export class GridPass {
-    private readonly program: Program;
+  private readonly program: Program;
 
-    private data: WebGLTexture | null = null;
-    private color: WebGLTexture | null = null;
-    private dataWidth = 0;
-    private dataHeight = 0;
+  private data: WebGLTexture | null = null;
+  private color: WebGLTexture | null = null;
+  private dataWidth = 0;
+  private dataHeight = 0;
 
-    private atlas: GlyphAtlas | null = null;
+  private atlas: GlyphAtlas | null = null;
 
-    constructor(private readonly gl: WebGL2RenderingContext) {
-        this.program = new Program(gl, VERTEX_SOURCE, FRAGMENT_SOURCE);
+  constructor(private readonly gl: WebGL2RenderingContext) {
+    this.program = new Program(gl, VERTEX_SOURCE, FRAGMENT_SOURCE);
 
-        this.program.use();
-        this.program.setTextureUnit('uGridData', 0);
-        this.program.setTextureUnit('uGridColor', 1);
-        this.program.setTextureUnit('uAtlas', 2);
+    this.program.use();
+    this.program.setTextureUnit("uGridData", 0);
+    this.program.setTextureUnit("uGridColor", 1);
+    this.program.setTextureUnit("uAtlas", 2);
+  }
+
+  setAtlas(atlas: GlyphAtlas): void {
+    this.atlas = atlas;
+  }
+
+  /** As data textures têm o tamanho exato do grid, então seguem o viewport. */
+  resize(colCount: number, rowCount: number): void {
+    if (
+      this.dataWidth === colCount &&
+      this.dataHeight === rowCount &&
+      this.data !== null &&
+      this.color !== null
+    ) {
+      return;
     }
+    if (this.data !== null) this.gl.deleteTexture(this.data);
+    if (this.color !== null) this.gl.deleteTexture(this.color);
 
-    setAtlas(atlas: GlyphAtlas): void {
-        this.atlas = atlas;
-    }
+    this.data = createDataTexture(this.gl, colCount, rowCount);
+    this.color = createDataTexture(this.gl, colCount, rowCount);
+    this.dataWidth = colCount;
+    this.dataHeight = rowCount;
+  }
 
-    /** As data textures têm o tamanho exato do grid, então seguem o viewport. */
-    resize(colCount: number, rowCount: number): void {
-        if (
-            this.dataWidth === colCount &&
-            this.dataHeight === rowCount &&
-            this.data !== null &&
-            this.color !== null
-        ) {
-            return;
-        }
-        if (this.data !== null) this.gl.deleteTexture(this.data);
-        if (this.color !== null) this.gl.deleteTexture(this.color);
+  draw(framebuffer: Framebuffer): void {
+    const { gl, atlas, data, color } = this;
+    if (atlas === null || data === null || color === null) return;
 
-        this.data = createDataTexture(this.gl, colCount, rowCount);
-        this.color = createDataTexture(this.gl, colCount, rowCount);
-        this.dataWidth = colCount;
-        this.dataHeight = rowCount;
-    }
+    // A única transferência CPU→GPU do quadro: dois planos, ~172 KB.
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, data);
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      0,
+      0,
+      this.dataWidth,
+      this.dataHeight,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      framebuffer.cells,
+    );
 
-    draw(framebuffer: Framebuffer): void {
-        const { gl, atlas, data, color } = this;
-        if (atlas === null || data === null || color === null) return;
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, color);
+    gl.texSubImage2D(
+      gl.TEXTURE_2D,
+      0,
+      0,
+      0,
+      this.dataWidth,
+      this.dataHeight,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      framebuffer.colors,
+    );
 
-        // A única transferência CPU→GPU do quadro: dois planos, ~172 KB.
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, data);
-        gl.texSubImage2D(
-            gl.TEXTURE_2D, 0, 0, 0, this.dataWidth, this.dataHeight,
-            gl.RGBA, gl.UNSIGNED_BYTE, framebuffer.cells,
-        );
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, atlas.texture);
 
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, color);
-        gl.texSubImage2D(
-            gl.TEXTURE_2D, 0, 0, 0, this.dataWidth, this.dataHeight,
-            gl.RGBA, gl.UNSIGNED_BYTE, framebuffer.colors,
-        );
+    this.program.use();
+    gl.uniform2f(
+      this.program.uniform("uGridSize"),
+      this.dataWidth,
+      this.dataHeight,
+    );
+    gl.uniform2f(this.program.uniform("uAtlasGrid"), atlas.cols, atlas.rows);
+    gl.uniform1f(this.program.uniform("uEmissiveRange"), EMISSIVE_RANGE);
 
-        gl.activeTexture(gl.TEXTURE2);
-        gl.bindTexture(gl.TEXTURE_2D, atlas.texture);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
 
-        this.program.use();
-        gl.uniform2f(this.program.uniform('uGridSize'), this.dataWidth, this.dataHeight);
-        gl.uniform2f(this.program.uniform('uAtlasGrid'), atlas.cols, atlas.rows);
-        gl.uniform1f(this.program.uniform('uEmissiveRange'), EMISSIVE_RANGE);
-
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-    }
-
-    dispose(): void {
-        this.program.dispose();
-        if (this.data !== null) this.gl.deleteTexture(this.data);
-        if (this.color !== null) this.gl.deleteTexture(this.color);
-        this.data = null;
-        this.color = null;
-    }
+  dispose(): void {
+    this.program.dispose();
+    if (this.data !== null) this.gl.deleteTexture(this.data);
+    if (this.color !== null) this.gl.deleteTexture(this.color);
+    this.data = null;
+    this.color = null;
+  }
 }

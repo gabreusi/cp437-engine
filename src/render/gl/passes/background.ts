@@ -1,6 +1,6 @@
-import { SKY_GLSL } from '../../sky-colors';
-import { FULLSCREEN_VERTEX, drawFullscreen } from '../fullscreen';
-import { Program } from '../program';
+import { SKY_GLSL } from "../../sky-colors";
+import { FULLSCREEN_VERTEX, drawFullscreen } from "../fullscreen";
+import { Program } from "../program";
 
 /**
  * Gradientes do céu.
@@ -22,6 +22,9 @@ uniform float uGround;     // topo da bruma, alinhado à linha desenhada
 uniform vec2 uAspect;      // corrige o formato da janela nas distâncias
 uniform float uGroundHaze; // intensidade artística da bruma
 uniform float uHazeScale;  // alcance da bruma, derivado da névoa e da altitude
+uniform float uSunGlow;    // quanto o sol acende o céu; 0 é noite
+uniform float uHorizonGlow;// quanto o poente colado no horizonte está aceso
+uniform float uSunSpread;  // largura do halo, relativa ao sol padrão
 
 ${SKY_GLSL}
 
@@ -40,14 +43,21 @@ float halo(vec2 uv, vec2 center, vec2 radius) {
 void main() {
     vec2 uv = vUv * uAspect;
 
-    // Halo grande e frio acima do horizonte, que dá volume ao céu.
-    float wash = halo(uv, vec2(uSun.x, uHorizon) * uAspect, vec2(1.30, 0.85));
+    // As três camadas são luz do sol espalhada pela atmosfera, e é o sol quem
+    // diz o quanto: sem isto o céu ficava idêntico com o sol a quatro graus ou
+    // a quarenta, com um disco de três graus ou de trinta, e continuava rosa
+    // depois de ele se pôr. Os fatores chegam prontos do modelo de céu, os
+    // mesmos que o raio de reflexo usa.
+    float horizonLit = uSunGlow * uHorizonGlow;
 
-    // Brilho quente atrás do sol.
-    float glow = halo(uv, uSun * uAspect, vec2(0.50, 0.34));
+    // Halo grande e frio acima do horizonte, que dá volume ao céu.
+    float wash = halo(uv, vec2(uSun.x, uHorizon) * uAspect, vec2(1.30, 0.85)) * horizonLit;
+
+    // Brilho quente atrás do sol, do tamanho do disco que o produz.
+    float glow = halo(uv, uSun * uAspect, vec2(0.50, 0.34) * uSunSpread) * uSunGlow;
 
     // Faixa fina de atmosfera colada no horizonte.
-    float band = halo(uv, vec2(uSun.x, uHorizon) * uAspect, vec2(0.95, 0.10));
+    float band = halo(uv, vec2(uSun.x, uHorizon) * uAspect, vec2(0.95, 0.10)) * horizonLit;
 
     // Abaixo do horizonte o fundo precisa ler como chão distante, não como céu.
     // Sem isto, onde a névoa apaga a grade sobra exatamente a mesma cor de cima
@@ -72,53 +82,80 @@ void main() {
 }`;
 
 export interface Atmosphere {
-    /** Posição do sol em UV, com y crescendo para cima. */
-    sunU: number;
-    sunV: number;
-    /** Altura do horizonte em UV, y para cima. Contínua, para os halos. */
-    horizonV: number;
-    /**
-     * Onde a bruma rasteira começa, em UV.
-     *
-     * Separado de `horizonV` porque o horizonte é desenhado com `_`, que a
-     * fonte assenta na base da célula, enquanto `horizonV` cai na borda de
-     * cima dela. Sem isso a bruma começa uma célula acima da linha e passa
-     * por cima dela.
-     */
-    groundV: number;
-    /**
-     * Alcance da bruma rasteira, em unidades de UV.
-     *
-     * Combina altitude da câmera, abertura da lente e ajustes de névoa numa
-     * constante só, para o shader não precisar conhecer nada da cena.
-     */
-    hazeScale: number;
+  /** Posição do sol em UV, com y crescendo para cima. */
+  sunU: number;
+  sunV: number;
+  /** Altura do horizonte em UV, y para cima. Contínua, para os halos. */
+  horizonV: number;
+  /**
+   * Onde a bruma rasteira começa, em UV.
+   *
+   * Separado de `horizonV` porque o horizonte é desenhado com `_`, que a
+   * fonte assenta na base da célula, enquanto `horizonV` cai na borda de
+   * cima dela. Sem isso a bruma começa uma célula acima da linha e passa
+   * por cima dela.
+   */
+  groundV: number;
+  /**
+   * Alcance da bruma rasteira, em unidades de UV.
+   *
+   * Combina altitude da câmera, abertura da lente e ajustes de névoa numa
+   * constante só, para o shader não precisar conhecer nada da cena.
+   */
+  hazeScale: number;
+  /**
+   * O que o sol acende no céu, copiado do modelo de céu.
+   *
+   * Não é recalculado aqui de propósito: quem decide é o sol, e o raio de
+   * reflexo que sai da grade lê exatamente os mesmos números. Dois cálculos
+   * separados se separariam na primeira mudança, e a grade passaria a
+   * refletir um poente que não está mais pintado atrás dela.
+   */
+  sunGlow: number;
+  horizonGlow: number;
+  sunSpread: number;
 }
 
 export class BackgroundPass {
-    private readonly program: Program;
+  private readonly program: Program;
 
-    constructor(private readonly gl: WebGL2RenderingContext) {
-        this.program = new Program(gl, FULLSCREEN_VERTEX, FRAGMENT_SOURCE);
-    }
+  constructor(private readonly gl: WebGL2RenderingContext) {
+    this.program = new Program(gl, FULLSCREEN_VERTEX, FRAGMENT_SOURCE);
+  }
 
-    draw(atmosphere: Atmosphere, width: number, height: number, groundHaze: number): void {
-        const { gl } = this;
-        this.program.use();
+  draw(
+    atmosphere: Atmosphere,
+    width: number,
+    height: number,
+    groundHaze: number,
+  ): void {
+    const { gl } = this;
+    this.program.use();
 
-        // Distâncias medidas no eixo maior, senão o halo achata junto com a janela.
-        const aspect = width / Math.max(1, height);
-        gl.uniform2f(this.program.uniform('uAspect'), Math.max(1, aspect), Math.max(1, 1 / aspect));
-        gl.uniform2f(this.program.uniform('uSun'), atmosphere.sunU, atmosphere.sunV);
-        gl.uniform1f(this.program.uniform('uHorizon'), atmosphere.horizonV);
-        gl.uniform1f(this.program.uniform('uGround'), atmosphere.groundV);
-        gl.uniform1f(this.program.uniform('uGroundHaze'), groundHaze);
-        gl.uniform1f(this.program.uniform('uHazeScale'), atmosphere.hazeScale);
+    // Distâncias medidas no eixo maior, senão o halo achata junto com a janela.
+    const aspect = width / Math.max(1, height);
+    gl.uniform2f(
+      this.program.uniform("uAspect"),
+      Math.max(1, aspect),
+      Math.max(1, 1 / aspect),
+    );
+    gl.uniform2f(
+      this.program.uniform("uSun"),
+      atmosphere.sunU,
+      atmosphere.sunV,
+    );
+    gl.uniform1f(this.program.uniform("uHorizon"), atmosphere.horizonV);
+    gl.uniform1f(this.program.uniform("uGround"), atmosphere.groundV);
+    gl.uniform1f(this.program.uniform("uGroundHaze"), groundHaze);
+    gl.uniform1f(this.program.uniform("uHazeScale"), atmosphere.hazeScale);
+    gl.uniform1f(this.program.uniform("uSunGlow"), atmosphere.sunGlow);
+    gl.uniform1f(this.program.uniform("uHorizonGlow"), atmosphere.horizonGlow);
+    gl.uniform1f(this.program.uniform("uSunSpread"), atmosphere.sunSpread);
 
-        drawFullscreen(gl);
-    }
+    drawFullscreen(gl);
+  }
 
-    dispose(): void {
-        this.program.dispose();
-    }
+  dispose(): void {
+    this.program.dispose();
+  }
 }

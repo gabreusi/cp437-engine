@@ -1,7 +1,7 @@
-import { settings } from '../config';
-import { addScaled } from '../math/vec3';
-import type { Camera } from '../render/camera';
-import type { Input } from './input';
+import { settings } from "../config";
+import { addScaled } from "../math/vec3";
+import type { Camera } from "../render/camera";
+import type { Input } from "./input";
 
 const TURBO_MULTIPLIER = 4;
 
@@ -13,33 +13,41 @@ const TURBO_MULTIPLIER = 4;
  * entra aqui no lugar sem a engine saber da diferença.
  */
 export class FreeCam {
-    private readonly look = { yaw: 0, pitch: 0 };
+  private readonly look = { yaw: 0, pitch: 0 };
 
-    constructor(
-        private readonly camera: Camera,
-        private readonly input: Input,
-    ) {}
+  constructor(
+    private readonly camera: Camera,
+    private readonly input: Input,
+  ) {}
 
-    update(deltaSeconds: number): void {
-        const { camera, input } = this;
+  update(deltaSeconds: number): void {
+    const { camera, input } = this;
 
-        this.input.consumeLook(this.look);
-        camera.look(
-            this.look.yaw * settings.lookSensitivity,
-            this.look.pitch * settings.lookSensitivity,
-        );
+    this.input.consumeLook(this.look);
+    camera.look(
+      this.look.yaw * settings.lookSensitivity,
+      this.look.pitch * settings.lookSensitivity,
+    );
 
-        const turbo = input.isDown('ShiftLeft') || input.isDown('ShiftRight');
-        const speed = settings.moveSpeed * (turbo ? TURBO_MULTIPLIER : 1) * deltaSeconds;
+    const turbo = input.isDown("ControlLeft") || input.isDown("ControlRight");
+    const speed =
+      settings.moveSpeed * (turbo ? TURBO_MULTIPLIER : 1) * deltaSeconds;
 
-        const forward = input.axis('KeyS', 'KeyW');
-        const strafe = input.axis('KeyA', 'KeyD');
-        const vertical = input.axis('KeyQ', 'KeyE');
+    const forward = input.axis("KeyS", "KeyW");
+    const strafe = input.axis("KeyA", "KeyD");
+    const vertical = input.axis("ShiftLeft", "Space");
 
-        if (forward !== 0) addScaled(camera.position, camera.position, camera.forward, forward * speed);
-        if (strafe !== 0) addScaled(camera.position, camera.position, camera.right, strafe * speed);
-        camera.position.y += vertical * speed;
+    if (forward !== 0)
+      addScaled(
+        camera.position,
+        camera.position,
+        camera.forward,
+        forward * speed,
+      );
+    if (strafe !== 0)
+      addScaled(camera.position, camera.position, camera.right, strafe * speed);
+    camera.position.y += vertical * speed;
 
-        camera.update();
-    }
+    camera.update();
+  }
 }

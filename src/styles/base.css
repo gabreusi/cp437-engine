@@ -1,10 +1,17 @@
 html,
 body {
-    height: 100%;
-    margin: 0;
-    background: var(--void);
-    overflow: hidden;
-    font-family: var(--mono);
-    /* A cena é arte ASCII: selecionar texto ao arrastar só atrapalha. */
-    user-select: none;
+  height: 100%;
+  margin: 0;
+  background: var(--void);
+  overflow: hidden;
+  font-family: var(--mono);
+  /* A cena é arte ASCII: selecionar texto ao arrastar só atrapalha. */
+  user-select: none;
+}
+
+@font-face {
+  font-family: "BIOS";
+  src:
+    local("BIOS"),
+    url("../assets/BIOS.woff") format("woff");
 }

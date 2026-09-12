@@ -1,6 +1,6 @@
-import { toHex } from '../math/color';
-import type { Framebuffer } from './framebuffer';
-import { CHARSET } from './palette';
+import { toHex } from "../math/color";
+import type { Framebuffer } from "./framebuffer";
+import { CHARSET } from "./palette";
 
 /**
  * Despeja o framebuffer como texto.
@@ -12,17 +12,18 @@ import { CHARSET } from './palette';
  * vinte linhas e sem caminho paralelo para divergir.
  */
 export const dumpGlyphs = (framebuffer: Framebuffer): string => {
-    const lines: string[] = [];
+  const lines: string[] = [];
 
-    for (let row = 0; row < framebuffer.rowCount; row += 1) {
-        let line = '';
-        for (let col = 0; col < framebuffer.colCount; col += 1) {
-            const glyph = framebuffer.cells[(row * framebuffer.colCount + col) * 4] ?? 0;
-            line += CHARSET[glyph] ?? '?';
-        }
-        lines.push(line);
+  for (let row = 0; row < framebuffer.rowCount; row += 1) {
+    let line = "";
+    for (let col = 0; col < framebuffer.colCount; col += 1) {
+      const glyph =
+        framebuffer.cells[(row * framebuffer.colCount + col) * 4] ?? 0;
+      line += CHARSET[glyph] ?? "?";
     }
-    return lines.join('\n');
+    lines.push(line);
+  }
+  return lines.join("\n");
 };
 
 /**
@@ -33,21 +34,23 @@ export const dumpGlyphs = (framebuffer: Framebuffer): string => {
  * resultado sai ordenado: as poucas cores que dominam a tela são as camadas do
  * cenário, e é sobre elas que a pergunta costuma ser.
  */
-export const countByColor = (framebuffer: Framebuffer): Record<string, number> => {
-    const counts = new Map<string, number>();
-    const { cells, colors } = framebuffer;
+export const countByColor = (
+  framebuffer: Framebuffer,
+): Record<string, number> => {
+  const counts = new Map<string, number>();
+  const { cells, colors } = framebuffer;
 
-    for (let offset = 0; offset < cells.length; offset += 4) {
-        // Alpha zero é célula vazia; contar isso afogaria o resto.
-        if ((cells[offset + 1] ?? 0) === 0) continue;
+  for (let offset = 0; offset < cells.length; offset += 4) {
+    // Alpha zero é célula vazia; contar isso afogaria o resto.
+    if ((cells[offset + 1] ?? 0) === 0) continue;
 
-        const key = toHex({
-            r: (colors[offset] ?? 0) / 255,
-            g: (colors[offset + 1] ?? 0) / 255,
-            b: (colors[offset + 2] ?? 0) / 255,
-        });
-        counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
+    const key = toHex({
+      r: (colors[offset] ?? 0) / 255,
+      g: (colors[offset + 1] ?? 0) / 255,
+      b: (colors[offset + 2] ?? 0) / 255,
+    });
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
 
-    return Object.fromEntries([...counts].sort((a, b) => b[1] - a[1]));
+  return Object.fromEntries([...counts].sort((a, b) => b[1] - a[1]));
 };

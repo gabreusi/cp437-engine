@@ -1,6 +1,6 @@
-import type { Framebuffer } from './framebuffer';
-import { COLOR, CHARSET, STAR_TINTS, SUN_SHADES } from './palette';
-import { OVERLAY_DEPTH } from './text';
+import type { Framebuffer } from "./framebuffer";
+import { COLOR, CHARSET, STAR_TINTS, SUN_SHADES } from "./palette";
+import { OVERLAY_DEPTH } from "./text";
 
 /**
  * As cores nomeadas do cenário, sem repetir.
@@ -8,7 +8,9 @@ import { OVERLAY_DEPTH } from './text';
  * `STAR_TINTS` repete o branco-azulado seis vezes para enviesar o sorteio das
  * estrelas; aqui isso viraria seis fileiras idênticas, então cai fora.
  */
-const SWATCHES = [...new Set([...SUN_SHADES, ...STAR_TINTS, ...Object.values(COLOR)])];
+const SWATCHES = [
+  ...new Set([...SUN_SHADES, ...STAR_TINTS, ...Object.values(COLOR)]),
+];
 
 /** Colunas por fileira da tabela. Bate com a largura do atlas. */
 const STRIDE = 16;
@@ -26,14 +28,14 @@ const STRIDE = 16;
  * tabela sai deformada e um glifo cortado parece um glifo errado.
  */
 export const drawDebugPattern = (framebuffer: Framebuffer): void => {
-    framebuffer.clear();
+  framebuffer.clear();
 
-    for (let index = 0; index < CHARSET.length; index += 1) {
-        const row = Math.floor(index / STRIDE);
-        const col = (index % STRIDE) * 2;
-        if (row >= framebuffer.rowCount || col >= framebuffer.colCount) continue;
+  for (let index = 0; index < CHARSET.length; index += 1) {
+    const row = Math.floor(index / STRIDE);
+    const col = (index % STRIDE) * 2;
+    if (row >= framebuffer.rowCount || col >= framebuffer.colCount) continue;
 
-        const color = SWATCHES[row % SWATCHES.length]!;
-        framebuffer.plot(col, row, index, color, OVERLAY_DEPTH);
-    }
+    const color = SWATCHES[row % SWATCHES.length]!;
+    framebuffer.plot(col, row, index, color, OVERLAY_DEPTH);
+  }
 };

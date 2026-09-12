@@ -1,5 +1,5 @@
-import { FULLSCREEN_VERTEX, drawFullscreen } from '../fullscreen';
-import { Program } from '../program';
+import { FULLSCREEN_VERTEX, drawFullscreen } from "../fullscreen";
+import { Program } from "../program";
 
 /**
  * Junta cena e bloom e aplica o tratamento de CRT.
@@ -51,49 +51,61 @@ void main() {
 }`;
 
 export interface CompositeOptions {
-    bloomIntensity: number;
-    scanlinePeriod: number;
-    scanlineStrength: number;
-    vignetteStrength: number;
+  bloomIntensity: number;
+  scanlinePeriod: number;
+  scanlineStrength: number;
+  vignetteStrength: number;
 }
 
 export class CompositePass {
-    private readonly program: Program;
+  private readonly program: Program;
 
-    constructor(private readonly gl: WebGL2RenderingContext) {
-        this.program = new Program(gl, FULLSCREEN_VERTEX, FRAGMENT_SOURCE);
-        this.program.use();
-        this.program.setTextureUnit('uScene', 0);
-        this.program.setTextureUnit('uBloomHalf', 1);
-        this.program.setTextureUnit('uBloomQuarter', 2);
-    }
+  constructor(private readonly gl: WebGL2RenderingContext) {
+    this.program = new Program(gl, FULLSCREEN_VERTEX, FRAGMENT_SOURCE);
+    this.program.use();
+    this.program.setTextureUnit("uScene", 0);
+    this.program.setTextureUnit("uBloomHalf", 1);
+    this.program.setTextureUnit("uBloomQuarter", 2);
+  }
 
-    draw(
-        scene: WebGLTexture,
-        bloomHalf: WebGLTexture,
-        bloomQuarter: WebGLTexture,
-        options: CompositeOptions,
-    ): void {
-        const { gl } = this;
-        gl.disable(gl.BLEND);
+  draw(
+    scene: WebGLTexture,
+    bloomHalf: WebGLTexture,
+    bloomQuarter: WebGLTexture,
+    options: CompositeOptions,
+  ): void {
+    const { gl } = this;
+    gl.disable(gl.BLEND);
 
-        this.program.use();
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, scene);
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, bloomHalf);
-        gl.activeTexture(gl.TEXTURE2);
-        gl.bindTexture(gl.TEXTURE_2D, bloomQuarter);
+    this.program.use();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, scene);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, bloomHalf);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, bloomQuarter);
 
-        gl.uniform1f(this.program.uniform('uBloomIntensity'), options.bloomIntensity);
-        gl.uniform1f(this.program.uniform('uScanlinePeriod'), options.scanlinePeriod);
-        gl.uniform1f(this.program.uniform('uScanlineStrength'), options.scanlineStrength);
-        gl.uniform1f(this.program.uniform('uVignetteStrength'), options.vignetteStrength);
+    gl.uniform1f(
+      this.program.uniform("uBloomIntensity"),
+      options.bloomIntensity,
+    );
+    gl.uniform1f(
+      this.program.uniform("uScanlinePeriod"),
+      options.scanlinePeriod,
+    );
+    gl.uniform1f(
+      this.program.uniform("uScanlineStrength"),
+      options.scanlineStrength,
+    );
+    gl.uniform1f(
+      this.program.uniform("uVignetteStrength"),
+      options.vignetteStrength,
+    );
 
-        drawFullscreen(gl);
-    }
+    drawFullscreen(gl);
+  }
 
-    dispose(): void {
-        this.program.dispose();
-    }
+  dispose(): void {
+    this.program.dispose();
+  }
 }
