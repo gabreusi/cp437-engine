@@ -2,7 +2,7 @@ import { settings } from "../config";
 import { copyRgb, type Rgb, rgb } from "../math/color";
 import { type Vec3, vec3 } from "../math/vec3";
 import { NO_OWNER, type ShadeOptions, shadeSurface } from "../light/shade";
-import { GLYPH } from "../render/palette";
+import { COLOR, GLYPH } from "../render/palette";
 import { glyphForPatch } from "../render/ramp";
 import type { Fragment } from "../render/rasterizer";
 import { createGroundPen, createMaterial, fogAmount, groundBand, writeHdrColor } from "../render/shading";
@@ -32,6 +32,16 @@ export class Ground implements Renderable {
    * duas linhas é superfície, e só aparece se alguma luz bater nele.
    */
   private readonly fillMaterial = createMaterial();
+
+  /**
+   * Material dedicado ao que um espelho vê do chão — separado de
+   * `fillMaterial` de propósito: aquele é reescrito célula a célula dentro
+   * do próprio `fillLitFloor()`, e ler esse ponteiro de outro objeto
+   * dependeria de qual célula foi processada por último, uma dependência de
+   * ordem que o contrato de `Renderable` proíbe. Este aqui só muda em
+   * `contribute()`, antes de qualquer `render()` do quadro.
+   */
+  private readonly reflectionMaterial = createMaterial();
 
   /**
    * Duas opções de sombreamento para a mesma conta.
@@ -79,6 +89,24 @@ export class Ground implements Renderable {
     opaque: false,
     fuse: false,
   };
+
+  /**
+   * Publica o material que um espelho vê do chão, antes de qualquer
+   * `render()` do quadro — ver `LightWorld.groundMaterial` e o comentário em
+   * `reflectionMaterial`. Cor fixa e plausível (`COLOR.GRID_MID`, a mesma
+   * faixa que `groundBand` usa a meia distância): reproduzir a variação por
+   * distância/textura da grade aqui exigiria a câmera, que `shadeSurface`
+   * não recebe, só para um reflexo de um bounce só.
+   */
+  contribute(context: RenderContext): void {
+    const material = this.reflectionMaterial;
+    copyRgb(material.albedo, COLOR.GRID_MID);
+    material.emissiveStrength = 0;
+    material.reflectivity = settings.groundReflectivity;
+    material.gloss = settings.groundGloss;
+    material.mirror = true;
+    context.lights.groundMaterial = material;
+  }
 
   render(context: RenderContext): void {
     const { camera, rasterizer } = context;

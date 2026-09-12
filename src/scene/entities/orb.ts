@@ -1,4 +1,11 @@
-import { copyRgb, luminance, type Rgb, rgb, scaleRgb } from "../../math/color";
+import {
+  copyRgb,
+  luminance,
+  type Rgb,
+  rgb,
+  scaleRgb,
+  setRgb,
+} from "../../math/color";
 import { copy } from "../../math/vec3";
 import { LIGHT, OCCLUDER } from "../../light/types";
 import type { LightWorld } from "../../light/world";
@@ -58,7 +65,16 @@ export const orbKind: EntityKindDef = {
     copy(occluder.center, entity.current);
     occluder.radius = entity.size.x;
     occluder.castsShadow = entity.castsShadow;
-    scaleRgb(occluder.tint, entity.color, Math.min(2, entity.intensity * 0.3));
+
+    // Emissor puro: sem albedo (não recebe luz de ninguém), o brilho vem
+    // todo do emissivo — mesmo fator hand-tuned de antes, agora fluindo
+    // pelo caminho comum de `shadeOccluders` em vez de um `scaleRgb` à
+    // parte no tint.
+    const { mirrorMaterial } = entity;
+    setRgb(mirrorMaterial.albedo, 0, 0, 0);
+    copyRgb(mirrorMaterial.emissive, entity.color);
+    mirrorMaterial.emissiveStrength = Math.min(2, entity.intensity * 0.3);
+    occluder.material = mirrorMaterial;
   },
 
   render: (

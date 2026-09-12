@@ -1,7 +1,8 @@
 import { luminance, type Rgb, rgb, setRgb } from "../math/color";
+import { copy, set, type Vec3, vec3 } from "../math/vec3";
 import { skyRadiance } from "./sky";
 import { occluded, SHADOW_BIAS, traceNearest } from "./trace";
-import { LIGHT, type Material } from "./types";
+import { LIGHT, type Light, type Material } from "./types";
 import type { LightWorld } from "./world";
 
 /**
@@ -60,7 +61,142 @@ export interface ShadeOptions {
   ambient: boolean;
 }
 
+/** Rascunho de módulo: direção unitária até a luz, reaproveitado por luz. */
+const lightDir: Vec3 = vec3();
+
+/**
+ * Direção unitária da superfície até a luz, e a distância até ela.
+ *
+ * `-1` quando a luz está fora do alcance — o corte mais barato que existe, e
+ * o que quase todo fragmento usa; extraído para ser reaproveitado também por
+ * `shadeOccluders`, que não tem uma normal para o `ndotl` mas ainda precisa
+ * da mesma queda por distância.
+ */
+const lightDirection = (
+  light: Light,
+  px: number,
+  py: number,
+  pz: number,
+  outDir: Vec3,
+): number => {
+  if (light.kind === LIGHT.DIRECTIONAL) {
+    copy(outDir, light.direction);
+    return Infinity;
+  }
+
+  const dx = light.position.x - px;
+  const dy = light.position.y - py;
+  const dz = light.position.z - pz;
+  const distanceSq = dx * dx + dy * dy + dz * dz;
+
+  const range = light.range;
+  if (distanceSq > range * range) return -1;
+
+  const distance = Math.sqrt(distanceSq);
+  const inverse = distance > 0 ? 1 / distance : 0;
+  set(outDir, dx * inverse, dy * inverse, dz * inverse);
+  return distance;
+};
+
+/**
+ * Queda de intensidade nessa direção e distância: quadrática ancorada mais
+ * borda de cone. `0` fora do cone — quem chamar deve tratar como "sem luz".
+ */
+const lightFalloff = (
+  light: Light,
+  distance: number,
+  lx: number,
+  ly: number,
+  lz: number,
+): number => {
+  if (light.kind === LIGHT.DIRECTIONAL) return 1;
+
+  const range = light.range;
+  const distanceSq = distance * distance;
+
+  // Queda quadrática ancorada na distância de meia-força, vezes uma janela
+  // que chega a zero no alcance. Sem a janela, cortar a luz no raio deixaria
+  // um degrau visível de brilho no chão.
+  const ratio = distanceSq / (range * range);
+  const window = Math.max(0, 1 - ratio * ratio);
+  let attenuation =
+    (window * window * HALF_POWER_SQ) / (distanceSq + HALF_POWER_SQ);
+
+  if (light.coneCos > -1) {
+    // Quanto o fragmento está para dentro do cone. O eixo aponta para onde a
+    // luz ilumina, então compara com `-l`.
+    const cosAxis = -(
+      lx * light.direction.x +
+      ly * light.direction.y +
+      lz * light.direction.z
+    );
+    if (cosAxis < light.coneCos) return 0;
+
+    const edge = Math.min(1, (cosAxis - light.coneCos) / light.coneSoftness);
+    attenuation *= edge;
+  }
+
+  return attenuation;
+};
+
 const reflected: Rgb = rgb();
+
+/**
+ * Opções da chamada aninhada de `reflectGround`: sem sombra (custaria um
+ * raio extra por reflexo), sem reflexo (trava a recursão em um bounce só,
+ * igual ao resto do espelho) e com ambiente ligado — diferente do
+ * preenchimento do próprio chão (`Ground`), que desliga ambiente de
+ * propósito para não afogar o contraste da grade; aqui não há grade para
+ * afogar, só um reflexo que não pode ficar preto longe de luz direta.
+ */
+const GROUND_REFLECT_OPTIONS: ShadeOptions = {
+  shadows: false,
+  reflections: false,
+  shadowThreshold: 0.004,
+  maxShadowLights: 0,
+  ambient: true,
+};
+
+/**
+ * O que um raio de espelho vê ao acertar o plano do chão (`y = 0`) — a
+ * mesma conta de luz de qualquer superfície, num bounce só. `false` se o
+ * raio não cruza o chão dentro do alcance do espelho, ou não há chão na
+ * cena (`world.groundMaterial` nulo).
+ */
+const reflectGround = (
+  world: LightWorld,
+  ox: number,
+  oy: number,
+  oz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+  out: Rgb,
+): boolean => {
+  const material = world.groundMaterial;
+  if (material === null || dy >= 0) return false;
+
+  const t = -oy / dy;
+  if (!(t > SHADOW_BIAS) || t >= MIRROR_RANGE) return false;
+
+  shadeSurface(
+    world,
+    material,
+    ox + dx * t,
+    0,
+    oz + dz * t,
+    0,
+    1,
+    0,
+    -dx,
+    -dy,
+    -dz,
+    NO_OWNER,
+    GROUND_REFLECT_OPTIONS,
+    out,
+  );
+  return true;
+};
 
 export const shadeSurface = (
   world: LightWorld,
@@ -113,59 +249,14 @@ export const shadeSurface = (
   for (let index = 0; index < world.lightCount; index += 1) {
     const light = world.light(index);
 
-    let lx: number;
-    let ly: number;
-    let lz: number;
-    let distance: number;
-    let attenuation: number;
+    const distance = lightDirection(light, px, py, pz, lightDir);
+    if (distance < 0) continue;
+    const lx = lightDir.x;
+    const ly = lightDir.y;
+    const lz = lightDir.z;
 
-    if (light.kind === LIGHT.DIRECTIONAL) {
-      lx = light.direction.x;
-      ly = light.direction.y;
-      lz = light.direction.z;
-      distance = Infinity;
-      attenuation = 1;
-    } else {
-      const dx = light.position.x - px;
-      const dy = light.position.y - py;
-      const dz = light.position.z - pz;
-      const distanceSq = dx * dx + dy * dy + dz * dz;
-
-      // O corte mais barato que existe, e o que quase todo fragmento usa.
-      const range = light.range;
-      if (distanceSq > range * range) continue;
-
-      distance = Math.sqrt(distanceSq);
-      const inverse = distance > 0 ? 1 / distance : 0;
-      lx = dx * inverse;
-      ly = dy * inverse;
-      lz = dz * inverse;
-
-      // Queda quadrática ancorada na distância de meia-força, vezes uma
-      // janela que chega a zero no alcance. Sem a janela, cortar a luz no
-      // raio deixaria um degrau visível de brilho no chão.
-      const ratio = distanceSq / (range * range);
-      const window = Math.max(0, 1 - ratio * ratio);
-      attenuation =
-        (window * window * HALF_POWER_SQ) / (distanceSq + HALF_POWER_SQ);
-
-      if (light.coneCos > -1) {
-        // Quanto o fragmento está para dentro do cone. O eixo aponta
-        // para onde a luz ilumina, então compara com `-l`.
-        const cosAxis = -(
-          lx * light.direction.x +
-          ly * light.direction.y +
-          lz * light.direction.z
-        );
-        if (cosAxis < light.coneCos) continue;
-
-        const edge = Math.min(
-          1,
-          (cosAxis - light.coneCos) / light.coneSoftness,
-        );
-        attenuation *= edge;
-      }
-    }
+    const attenuation = lightFalloff(light, distance, lx, ly, lz);
+    if (attenuation <= 0) continue;
 
     const ndotl = nx * lx + ny * ly + nz * lz;
     if (ndotl <= 0) continue;
@@ -251,11 +342,17 @@ export const shadeSurface = (
       : null;
 
     if (hit !== null) {
-      // Um bounce: o que o espelho mostra do corpo é a cor dele, não uma
-      // segunda rodada de iluminação. Recursão aqui multiplicaria o custo
-      // por fragmento e o ganho seria espelho dentro de espelho.
+      // Um bounce: o que o espelho mostra do corpo é a cor dele, já
+      // considerando a luz que bate nele (`shadeOccluders`) — não uma
+      // segunda rodada de iluminação aqui. Recursão aqui multiplicaria o
+      // custo por fragmento e o ganho seria espelho dentro de espelho.
       setRgb(reflected, hit.tint.r, hit.tint.g, hit.tint.b);
-    } else {
+    } else if (
+      !(
+        material.mirror &&
+        reflectGround(world, originX, originY, originZ, rx, ry, rz, reflected)
+      )
+    ) {
       skyRadiance(world.sky, rx, ry, rz, material.gloss, reflected);
     }
 
@@ -274,4 +371,63 @@ export const shadeSurface = (
 
   setRgb(out, r, g, b);
   return luminance(out);
+};
+
+/**
+ * Preenche `Occluder.tint` de todo corpo com material, a partir da luz que
+ * bate nele — o que faz um espelho mostrar a cor certa (holofote vermelho
+ * bate num monólito branco, o reflexo desse monólito fica vermelho) em vez
+ * da fração fixa da cor crua de antes.
+ *
+ * Isotrópico, de propósito: um corpo inteiro (esfera ou caixa) não tem uma
+ * normal só, então não há `ndotl` aqui, só irradiância chegando no centro do
+ * corpo. Sem raio de sombra também — mantém o custo em
+ * O(occluders × luzes), irrelevante perto do laço por fragmento (na cena de
+ * referência, ~16×13 iterações por quadro). Chamado uma vez por quadro, de
+ * `Scene.contribute()`, depois que `LightWorld.finalize()` já rodou — só aí
+ * todo occluder e toda luz do quadro estão definitivos.
+ */
+export const shadeOccluders = (world: LightWorld): void => {
+  for (let index = 0; index < world.occluderCount; index += 1) {
+    const occluder = world.occluder(index);
+    const material = occluder.material;
+    if (material === null) continue;
+
+    const { albedo } = material;
+    const { x: px, y: py, z: pz } = occluder.center;
+
+    let r = world.ambient.r * albedo.r;
+    let g = world.ambient.g * albedo.g;
+    let b = world.ambient.b * albedo.b;
+
+    for (let lightIndex = 0; lightIndex < world.lightCount; lightIndex += 1) {
+      const light = world.light(lightIndex);
+
+      const distance = lightDirection(light, px, py, pz, lightDir);
+      if (distance < 0) continue;
+
+      const attenuation = lightFalloff(
+        light,
+        distance,
+        lightDir.x,
+        lightDir.y,
+        lightDir.z,
+      );
+      if (attenuation <= 0) continue;
+
+      const contribution = attenuation * light.intensity;
+      r += albedo.r * light.color.r * contribution;
+      g += albedo.g * light.color.g * contribution;
+      b += albedo.b * light.color.b * contribution;
+    }
+
+    const emission = material.emissiveStrength;
+    if (emission > 0) {
+      r += material.emissive.r * emission;
+      g += material.emissive.g * emission;
+      b += material.emissive.b * emission;
+    }
+
+    setRgb(occluder.tint, r, g, b);
+  }
 };

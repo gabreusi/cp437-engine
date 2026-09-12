@@ -76,6 +76,12 @@ export interface Occluder {
   boundRadius: number;
   /** O que um raio de reflexão enxerga ao acertar este corpo. */
   tint: Rgb;
+  /**
+   * Material de verdade do dono, para `shadeOccluders` calcular `tint` a
+   * partir da luz que bate aqui — e não de uma fração fixa da cor crua.
+   * `null` para um corpo sem material próprio (nenhum hoje).
+   */
+  material: Material | null;
   castsShadow: boolean;
   /** Quem pediu o occluder. É por aqui que o clique seleciona um objeto. */
   ownerId: number;
@@ -149,4 +155,11 @@ export interface SkyModel {
    * ficava com a mesma auréola de um de três, e o disco vazava para fora dela.
    */
   sunSpread: number;
+
+  /**
+   * Estrelas visíveis, para o reflexo mostrar as mesmas que o céu pinta —
+   * não um ruído independente, que divergiria do fundo. Publicado por
+   * `Sky.contribute()`; `skyRadiance` só lê.
+   */
+  stars: ReadonlyArray<{ x: number; y: number; z: number; color: Rgb }>;
 }

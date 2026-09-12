@@ -1,4 +1,4 @@
-import { copyRgb, type Rgb, rgb, scaleRgb } from "../../math/color";
+import { copyRgb, type Rgb, rgb, scaleRgb, setRgb } from "../../math/color";
 import { copy, cross, normalize, set, type Vec3, vec3 } from "../../math/vec3";
 import { LIGHT, OCCLUDER } from "../../light/types";
 import type { LightWorld } from "../../light/world";
@@ -103,7 +103,14 @@ export const spotlightKind: EntityKindDef = {
     copy(occluder.center, entity.current);
     occluder.radius = entity.size.x;
     occluder.castsShadow = entity.castsShadow;
-    scaleRgb(occluder.tint, entity.color, Math.min(2, entity.intensity * 0.15));
+
+    // Emissor puro, mesmo tratamento do orbe: sem albedo, brilho todo no
+    // emissivo, mesmo fator hand-tuned de antes.
+    const { mirrorMaterial } = entity;
+    setRgb(mirrorMaterial.albedo, 0, 0, 0);
+    copyRgb(mirrorMaterial.emissive, entity.color);
+    mirrorMaterial.emissiveStrength = Math.min(2, entity.intensity * 0.15);
+    occluder.material = mirrorMaterial;
   },
 
   render: (entity: EntityState, context: RenderContext, _pen: SurfacePen): void => {

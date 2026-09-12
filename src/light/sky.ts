@@ -43,6 +43,15 @@ const GLOW_FALLOFF = 7;
  */
 const MIN_LOBE = 1;
 
+/**
+ * Cosseno mínimo para uma estrela aparecer no reflexo — um glint apertado,
+ * do tamanho de uma célula a esta distância angular, não um disco.
+ */
+const STAR_REFLECT_COS_THRESHOLD = 0.9997;
+
+/** Força do glint — discreto de propósito, para não competir com o sol. */
+const STAR_REFLECT_STRENGTH = 0.6;
+
 export const skyRadiance = (
   sky: SkyModel,
   dx: number,
@@ -80,6 +89,26 @@ export const skyRadiance = (
   r += sky.sunColor.r * disc;
   g += sky.sunColor.g * disc;
   b += sky.sunColor.b * disc;
+
+  // As mesmas estrelas que `Sky` pinta em tela, não um ruído à parte — senão
+  // o reflexo divergiria do céu atrás dele. Varredura direta e não um índice
+  // espacial: só roda para raio de espelho que escapa para o céu aberto,
+  // limitado pela área de tela do espelho, não pela cena inteira; revisitar
+  // só se o `sceneMs` do HUD acusar custo real com um espelho grande virado
+  // para cima.
+  if (dy >= 0) {
+    for (const star of sky.stars) {
+      const cosStar = dx * star.x + dy * star.y + dz * star.z;
+      if (cosStar < STAR_REFLECT_COS_THRESHOLD) continue;
+
+      const edge =
+        (cosStar - STAR_REFLECT_COS_THRESHOLD) / (1 - STAR_REFLECT_COS_THRESHOLD);
+      const amount = edge * STAR_REFLECT_STRENGTH;
+      r += star.color.r * amount;
+      g += star.color.g * amount;
+      b += star.color.b * amount;
+    }
+  }
 
   // Abaixo do horizonte o raio não sai para o céu: encontra chão e bruma.
   // Sem isto, uma superfície virada para baixo refletiria estrelas.

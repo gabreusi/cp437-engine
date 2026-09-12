@@ -101,10 +101,20 @@ export class Sky implements Renderable {
     }
   }
 
-  render({ rasterizer, viewport, time }: RenderContext): void {
+  /**
+   * Garante as estrelas do quadro e publica as mesmas em `world.sky.stars`
+   * — é o que deixa um raio de espelho refletir a estrela de verdade que
+   * está em tela, não um ruído à parte (ver `skyRadiance`). Referência
+   * direta, sem cópia: os campos extras de `Star` (glifo, cintilação) que
+   * `light/` não usa não custam nada por ficarem ali.
+   */
+  contribute({ lights }: RenderContext): void {
     if (this.builtCount !== settings.starCount)
       this.rebuild(settings.starCount);
+    lights.sky.stars = this.stars;
+  }
 
+  render({ rasterizer, viewport, time }: RenderContext): void {
     this.drawHorizon(rasterizer.horizonRow(), viewport.colCount, rasterizer);
 
     for (const star of this.stars) {

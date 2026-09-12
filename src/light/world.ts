@@ -4,6 +4,7 @@ import { set, vec3 } from "../math/vec3";
 import {
   LIGHT,
   type Light,
+  type Material,
   OCCLUDER,
   type Occluder,
   type SkyModel,
@@ -29,6 +30,7 @@ const createOccluder = (): Occluder => ({
   toLocal: mat4.identity(mat4.create()),
   boundRadius: 0,
   tint: rgb(),
+  material: null,
   castsShadow: true,
   ownerId: -1,
 });
@@ -57,7 +59,14 @@ export class LightWorld {
     sunGlow: 1,
     horizonGlow: 1,
     sunSpread: 1,
+    stars: [],
   };
+
+  /**
+   * Material de verdade do chão, para o raio de espelho ver a cor certa —
+   * publicado por `Ground.contribute()`. `null` sem chão na cena.
+   */
+  groundMaterial: Material | null = null;
 
   private readonly lightPool: Light[] = [];
   private readonly occluderPool: Occluder[] = [];
@@ -85,6 +94,7 @@ export class LightWorld {
     this.lights = 0;
     this.occluders = 0;
     setRgb(this.ambient, 0, 0, 0);
+    this.groundMaterial = null;
   }
 
   /** Devolve uma luz zerada do pool. Quem chamou preenche os campos. */
@@ -130,6 +140,7 @@ export class LightWorld {
     mat4.identity(occluder.toLocal);
     occluder.boundRadius = 0;
     setRgb(occluder.tint, 0, 0, 0);
+    occluder.material = null;
     occluder.castsShadow = true;
     occluder.ownerId = ownerId;
     return occluder;

@@ -1,4 +1,4 @@
-import { copyRgb, scaleRgb } from "../../math/color";
+import { copyRgb } from "../../math/color";
 import { copy, type Vec3, vec3 } from "../../math/vec3";
 import { OCCLUDER } from "../../light/types";
 import type { LightWorld } from "../../light/world";
@@ -40,9 +40,6 @@ const start: Vec3 = vec3();
 const end: Vec3 = vec3();
 const normal: Vec3 = vec3();
 
-/** Quanto de si a caixa devolve num espelho. Escuro: é volume, não lâmpada. */
-const MIRROR_TINT = 0.35;
-
 export const monolithKind: EntityKindDef = {
   label: "Monolith",
 
@@ -75,7 +72,18 @@ export const monolithKind: EntityKindDef = {
     copy(occluder.half, entity.size);
     occluder.toLocal.set(shape.toLocal);
     occluder.castsShadow = entity.castsShadow;
-    scaleRgb(occluder.tint, entity.color, MIRROR_TINT);
+
+    // Mesma leitura do material que `render` monta para `pen` — é o que
+    // `shadeOccluders` usa para calcular a cor de verdade que um espelho vê
+    // deste corpo, com a luz que bate nele.
+    const { mirrorMaterial } = entity;
+    copyRgb(mirrorMaterial.albedo, entity.color);
+    copyRgb(mirrorMaterial.emissive, entity.color);
+    mirrorMaterial.emissiveStrength = entity.intensity;
+    mirrorMaterial.reflectivity = entity.reflectivity;
+    mirrorMaterial.gloss = entity.gloss;
+    mirrorMaterial.mirror = entity.mirror;
+    occluder.material = mirrorMaterial;
   },
 
   render: (

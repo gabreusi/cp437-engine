@@ -2,6 +2,7 @@ import { type Rgb, rgb } from "../../math/color";
 import { type Vec3, vec3 } from "../../math/vec3";
 import { TEXTURE, TEXTURES, type SurfaceTexture } from "../../render/ramp";
 import type { SurfacePen } from "../../render/shading";
+import type { Material } from "../../light/types";
 import type { LightWorld } from "../../light/world";
 import type { RenderContext } from "../scene";
 
@@ -85,6 +86,17 @@ export interface EntityState {
   /** Animação: raio, altura e velocidade da órbita. Zero deixa parado. */
   orbitRadius: number;
   orbitSpeed: number;
+
+  /**
+   * O que um raio de espelho vê deste corpo, de verdade — não serializa
+   * (como `current`), recriado em `createEntity()`. Precisa ser um objeto
+   * por instância, e não um rascunho de módulo por tipo: `shadeOccluders`
+   * lê o ponteiro guardado em `Occluder.material` depois que *todo*
+   * `contribute()` do quadro já rodou, e um rascunho compartilhado entre,
+   * digamos, dois monólitos teria o segundo sobrescrevendo o material do
+   * primeiro antes dessa leitura.
+   */
+  mirrorMaterial: Material;
 }
 
 /**
@@ -183,6 +195,14 @@ export const createEntity = (
   solid: false,
   orbitRadius: 0,
   orbitSpeed: 0,
+  mirrorMaterial: {
+    albedo: rgb(1, 1, 1),
+    emissive: rgb(),
+    emissiveStrength: 0,
+    reflectivity: 0,
+    gloss: 24,
+    mirror: false,
+  },
   ...overrides,
 });
 
