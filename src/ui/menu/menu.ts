@@ -368,8 +368,12 @@ export class Menu {
       onTrack &&
       (events.pressed || this.draggingSlider === index)
     ) {
+      // A posição exata, não a célula inteira: senão a trilha só responde a
+      // cada `cellWidth` pixels de mouse, e um slider de faixa larga vira
+      // um punhado de saltos em vez de seguir o arrasto.
       const ratio =
-        (col - layout.trackCol) / Math.max(1, layout.trackWidth - 1);
+        (this.cursor.exactCol - layout.trackCol) /
+        Math.max(1, layout.trackWidth - 1);
       const value =
         item.min + Math.max(0, Math.min(1, ratio)) * (item.max - item.min);
       item.set(clampToRange(value, item));
@@ -394,8 +398,21 @@ export class Menu {
     this.hoverCol = col;
     this.hoverRow = row;
 
+    // A célula inteira serve para saber onde desenhar a alça (`hoverCol`
+    // acima); mirar e arrastar usam a posição exata, ou o objeto andaria
+    // aos saltos de uma célula toda vez que o mouse cruzasse a borda dela.
+    const exactCol = this.cursor.exactCol;
+    const exactRow = this.cursor.exactRow;
+
     if (events.pressed) {
-      this.manipulator.press(this.world, lights, camera, rasterizer, col, row);
+      this.manipulator.press(
+        this.world,
+        lights,
+        camera,
+        rasterizer,
+        exactCol,
+        exactRow,
+      );
       return;
     }
 
@@ -413,8 +430,8 @@ export class Menu {
       this.world,
       camera,
       rasterizer,
-      col,
-      row,
+      exactCol,
+      exactRow,
       events.deltaX / viewport.cellWidth,
       events.deltaY / viewport.cellHeight,
       events.shift,

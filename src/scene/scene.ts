@@ -36,6 +36,19 @@ export interface Renderable {
    * ou sumiria conforme alguém reordenasse a cena.
    */
   contribute?(context: RenderContext): void;
+
+  /**
+   * Incidência de luz sobre o que já foi desenhado — feixe de holofote,
+   * poeira, qualquer coisa que não tenha superfície própria (ver
+   * `Fragment.fuse`).
+   *
+   * Fase separada de `render` pelo mesmo motivo que `contribute` é separada
+   * dele: um fragmento com `fuse` só tinge corretamente quem já está na
+   * célula, e a ordem de `renderables`/`entities` é a ordem em que o objeto
+   * foi criado, não uma ordem "sólido antes de luz". Rodar depois que todo
+   * `render` do quadro terminou garante isso sem depender de ordem nenhuma.
+   */
+  renderGlow?(context: RenderContext): void;
 }
 
 export class Scene {
@@ -50,11 +63,19 @@ export class Scene {
     for (const renderable of this.renderables) {
       renderable.contribute?.(context);
     }
+    // Só agora todo occluder do quadro tem `half`/`center` definitivos —
+    // é a hora de pré-calcular o que `trace.ts` usa para descartar barato.
+    context.lights.finalize();
   }
 
   render(context: RenderContext): void {
     for (const renderable of this.renderables) {
       renderable.render(context);
+    }
+    // Só agora toda superfície do quadro está na grade — é a hora de tingir
+    // por cima, não de desenhar corpo (ver `Renderable.renderGlow`).
+    for (const renderable of this.renderables) {
+      renderable.renderGlow?.(context);
     }
   }
 }

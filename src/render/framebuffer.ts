@@ -114,6 +114,21 @@ export class Framebuffer {
      * tinta, de propósito.
      */
     opaque = false,
+    /**
+     * Incidência, não substituição — ver `Fragment.fuse`.
+     *
+     * Vence o teste de profundidade do mesmo jeito, mas em vez de trocar
+     * glifo, alpha e `opaque`, soma a cor e o emissivo sobre o que já está
+     * escrito na célula. É o que deixa o feixe de um holofote tingir a
+     * parede atrás dele em vez de abrir um buraco nela — sem isto, a célula
+     * mais próxima sempre vence inteira, e uma parede hachurada perde o
+     * `opaque` (viraria janela para o céu no composite) só por um ponto de
+     * luz ter passado por cima com profundidade igual ou menor.
+     *
+     * Não faz efeito em célula ainda vazia: aí não há o que tingir, e o
+     * ponto de luz desenha a si mesmo do jeito de sempre.
+     */
+    fuse = false,
   ): void {
     if (col < 0 || col >= this.colCount || row < 0 || row >= this.rowCount)
       return;
@@ -122,9 +137,41 @@ export class Framebuffer {
     const current = this.depth[index]!;
     if (depth > current + Math.abs(current) * DEPTH_TOLERANCE) return;
 
+    const offset = index * 4;
+    const hadContent = this.cells[offset + 1] !== 0;
+
+    if (fuse && hadContent) {
+      this.depth[index] = depth;
+      const inv = 1 / 255;
+      this.colors[offset] = toByte(this.colors[offset]! * inv + color.r * alpha);
+      this.colors[offset + 1] = toByte(
+        this.colors[offset + 1]! * inv + color.g * alpha,
+      );
+      this.colors[offset + 2] = toByte(
+        this.colors[offset + 2]! * inv + color.b * alpha,
+      );
+      this.cells[offset + 2] = toByte(
+        this.cells[offset + 2]! * inv + emissive / EMISSIVE_RANGE,
+      );
+      return;
+    }
+
+    /**
+     * Mesma superfície de quem já estava aqui — uma aresta bem em cima da
+     * hachura da própria face, por exemplo, quase sempre à mesma
+     * profundidade dela. Sem isto, a aresta (traço, `opaque=false`) venceria
+     * a célula inteira e apagaria o `opaque` que a hachura tinha deixado —
+     * mesmo bug que o `fuse` resolve para incidência, aqui para duas
+     * superfícies coincidentes. Uma superfície claramente mais perto, a uma
+     * profundidade *diferente* de verdade, não herda nada de quem ficou para
+     * trás: decide sozinha, com o próprio `opaque`.
+     */
+    const coincident =
+      hadContent && Math.abs(depth - current) <= Math.abs(current) * DEPTH_TOLERANCE;
+    const staysOpaque = coincident && this.colors[offset + 3] !== 0;
+
     this.depth[index] = depth;
 
-    const offset = index * 4;
     this.cells[offset] = glyph;
     this.cells[offset + 1] = toByte(alpha);
     this.cells[offset + 2] = toByte(emissive / EMISSIVE_RANGE);
@@ -133,6 +180,6 @@ export class Framebuffer {
     this.colors[offset] = toByte(color.r);
     this.colors[offset + 1] = toByte(color.g);
     this.colors[offset + 2] = toByte(color.b);
-    this.colors[offset + 3] = opaque ? 255 : 0;
+    this.colors[offset + 3] = opaque || staysOpaque ? 255 : 0;
   }
 }

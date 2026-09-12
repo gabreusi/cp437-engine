@@ -9,7 +9,7 @@
  */
 
 export const MAX_COLS = 180;
-export const MAX_ROWS = 120;
+export const MAX_ROWS = 90;
 
 /** Altura dividida pela largura da célula. 2 é a proporção clássica de terminal. */
 export const CELL_ASPECT = 2;

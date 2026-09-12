@@ -3,7 +3,7 @@ import { copyRgb, type Rgb, rgb } from "../math/color";
 import { type Vec3, vec3 } from "../math/vec3";
 import { NO_OWNER, type ShadeOptions, shadeSurface } from "../light/shade";
 import { GLYPH } from "../render/palette";
-import { glyphForPatch, RAMP } from "../render/ramp";
+import { glyphForPatch } from "../render/ramp";
 import type { Fragment } from "../render/rasterizer";
 import { createGroundPen, createMaterial, fogAmount, groundBand, writeHdrColor } from "../render/shading";
 import type { Renderable, RenderContext } from "./scene";
@@ -77,6 +77,7 @@ export class Ground implements Renderable {
     alpha: 1,
     emissive: 0,
     opaque: false,
+    fuse: false,
   };
 
   render(context: RenderContext): void {
@@ -128,9 +129,9 @@ export class Ground implements Renderable {
     const { camera, rasterizer, viewport, lights, shading } = context;
     const { lit } = this.pen;
 
-    // Sem iluminação, ou com a rampa desligada, o glifo volta a ser só
+    // Sem iluminação, ou com o peso da rampa zerado, o glifo volta a ser só
     // geometria — e um pedaço de chão não tem geometria própria para mostrar.
-    if (!lit.lit || lit.rampMode === RAMP.OFF) return;
+    if (!lit.lit || lit.rampWeight <= 0) return;
 
     // O plano do chão visto exatamente de perfil não tem área na tela.
     const height = camera.position.y;

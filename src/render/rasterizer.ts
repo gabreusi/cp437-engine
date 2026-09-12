@@ -28,6 +28,17 @@ export interface Fragment {
    * para linha de grade, estrela e aresta.
    */
   opaque: boolean;
+  /**
+   * Incidência, não superfície — soma a cor sobre a célula em vez de
+   * substituí-la, ver `Framebuffer.plot`.
+   *
+   * É o que separa o feixe de um holofote de uma parede: o feixe não tem
+   * corpo próprio, é luz caindo sobre o que já está na frente da câmera.
+   * Vencer o teste de profundidade e trocar o glifo apagaria essa superfície
+   * — e, pior, zeraria o `opaque` dela, abrindo buraco para o céu no
+   * composite. `false` continua sendo o comportamento de sempre: substitui.
+   */
+  fuse: boolean;
 }
 
 /**
@@ -100,6 +111,7 @@ export class Rasterizer {
     alpha: 1,
     emissive: 0,
     opaque: false,
+    fuse: false,
   };
   private readonly sample: SurfaceSample = {
     x: 0,
@@ -329,6 +341,7 @@ export class Rasterizer {
         this.fragment.alpha,
         this.fragment.emissive,
         this.fragment.opaque,
+        this.fragment.fuse,
       );
     }
   }
@@ -476,6 +489,7 @@ export class Rasterizer {
     alpha = 1,
     emissive = 0,
     opaque = false,
+    fuse = false,
   ): void {
     this.framebuffer.plot(
       col,
@@ -486,6 +500,7 @@ export class Rasterizer {
       alpha,
       emissive,
       opaque,
+      fuse,
     );
   }
 
@@ -497,6 +512,7 @@ export class Rasterizer {
     alpha = 1,
     emissive = 0,
     opaque = false,
+    fuse = false,
   ): void {
     this.framebuffer.plot(
       Math.round(projected.col),
@@ -507,6 +523,7 @@ export class Rasterizer {
       alpha,
       emissive,
       opaque,
+      fuse,
     );
   }
 }

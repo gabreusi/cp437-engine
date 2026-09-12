@@ -334,11 +334,18 @@ export const drawItem = (
   focused: boolean,
   hovered: boolean,
 ): void => {
-  const { itemCol, trackCol, trackWidth } = layout;
+  const { itemCol, itemWidth, trackCol, trackWidth } = layout;
   const emissive = focused ? 0.45 : 0;
 
   if (item.kind === "heading") {
-    drawText(framebuffer, itemCol, y, item.label, MENU_COLORS.HEADING, 0.85);
+    drawText(
+      framebuffer,
+      itemCol,
+      y,
+      item.label.slice(0, itemWidth),
+      MENU_COLORS.HEADING,
+      0.85,
+    );
     return;
   }
 
@@ -422,7 +429,7 @@ export const drawItem = (
         framebuffer,
         itemCol + 4,
         y,
-        item.label,
+        item.label.slice(0, Math.max(0, itemWidth - 4)),
         labelColor,
         1,
         emissive,
@@ -473,7 +480,7 @@ export const drawItem = (
         framebuffer,
         itemCol,
         y,
-        `» ${item.label}`,
+        `» ${item.label}`.slice(0, itemWidth),
         color,
         item.danger && !focused ? 0.7 : 1,
         emissive,
@@ -497,7 +504,7 @@ export const drawItem = (
         framebuffer,
         itemCol + 4,
         y,
-        item.label,
+        item.label.slice(0, Math.max(0, itemWidth - 4)),
         color,
         1,
         item.selected ? Math.max(emissive, 0.3) : emissive,

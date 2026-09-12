@@ -6,11 +6,11 @@ import { LightWorld } from "../light/world";
 import type { RenderContext } from "../scene/scene";
 import { COLOR, GLYPH } from "./palette";
 import {
-  RAMP,
+  MIN_FILL_COVERAGE,
   TEXTURE,
   type SurfaceTexture,
+  glyphForLineEdge,
   glyphForLineShape,
-  glyphForLuminance,
   glyphForPatch,
 } from "./ramp";
 import type { Fragment, SurfaceSample, SurfaceStyle } from "./rasterizer";
@@ -98,7 +98,8 @@ export interface LitContext {
   cameraX: number;
   cameraY: number;
   cameraZ: number;
-  rampMode: typeof RAMP.CLASSIC | typeof RAMP.FAMILY | typeof RAMP.OFF;
+  /** Quanto a luz pode vencer a forma na escolha do glifo de aresta. Zero é só geometria. */
+  rampWeight: number;
   rampExposure: number;
   lit: boolean;
 }
@@ -120,7 +121,7 @@ export const createLitContext = (): LitContext => ({
   cameraX: 0,
   cameraY: 0,
   cameraZ: 0,
-  rampMode: RAMP.OFF,
+  rampWeight: 0,
   rampExposure: 1.5,
   lit: true,
 });
@@ -136,10 +137,10 @@ export const beginLit = (lit: LitContext, context: RenderContext): void => {
   lit.lit = settings.lightingEnabled;
   lit.rampExposure = settings.rampExposure;
 
-  // Sem iluminação a rampa some junto: o glifo volta a ser só geometria, e a
+  // Sem iluminação o peso some junto: o glifo volta a ser só geometria, e a
   // cena inteira volta a ser o que era antes de existir luz. É a referência
   // com que qualquer efeito daqui para frente é comparado.
-  lit.rampMode = settings.lightingEnabled ? settings.glyphRamp : RAMP.OFF;
+  lit.rampWeight = settings.lightingEnabled ? settings.rampWeight : 0;
 };
 
 const shaded: Rgb = rgb();
@@ -174,14 +175,13 @@ export const shadeFragment = (
   normalY: number,
   normalZ: number,
   ownerId: number,
-  geometric: number,
   texture: SurfaceTexture,
   /**
    * A linha está preenchendo uma área, e não desenhando uma aresta.
    *
-   * Muda a rampa: uma aresta tem silhueta a preservar — é para isso que o modo
-   * por família existe —, e o interior de uma face não tem. Ali o traço é meio
-   * e não fim, e a rampa inteira da textura é o que descreve superfície.
+   * Muda a busca: uma aresta tem silhueta a preservar, e o interior de uma
+   * face não tem. Ali o traço é meio e não fim, e a cobertura medida do pool
+   * inteiro da textura é o que descreve superfície.
    */
   area: boolean,
   out: Fragment,
@@ -189,7 +189,7 @@ export const shadeFragment = (
   if (!lit.lit) {
     copyRgb(out.color, material.albedo);
     out.emissive = material.emissiveStrength;
-    out.glyph = geometric;
+    out.glyph = geometricGlyph(sample);
     return;
   }
 
@@ -231,12 +231,16 @@ export const shadeFragment = (
         sample.x,
         sample.y,
         sample.z,
-        1,
+        MIN_FILL_COVERAGE,
       )
-    : glyphForLuminance(
+    : glyphForLineEdge(
         luminance,
-        geometric,
-        lit.rampMode,
+        sample.offsetCol,
+        sample.offsetRow,
+        sample.dirCol,
+        sample.dirRow,
+        sample.depth < settings.viewDistance * UNDERSCORE_RANGE,
+        lit.rampWeight,
         lit.rampExposure,
         texture,
         sample.x,
@@ -279,9 +283,9 @@ export class SurfacePen {
    *
    * Uma face sólida é feita de linhas — é a única primitiva que a engine tem —
    * mas o que elas representam ali não é traço nenhum: é superfície. Com isto
-   * ligado a rampa inteira da textura entra no lugar da rampa por família, e o
-   * nível mais baixo deixa de ser o espaço, senão um pedaço escuro da face
-   * viraria buraco.
+   * ligado, a busca por cobertura no pool inteiro da textura entra no lugar
+   * da busca por forma, e o nível mais baixo deixa de ser o espaço
+   * (`MIN_FILL_COVERAGE`), senão um pedaço escuro da face viraria buraco.
    */
   area = false;
 
@@ -317,13 +321,6 @@ export class SurfacePen {
 
     this.beforeShade?.(sample, this.material);
 
-    // O casamento de forma custa mais que o switch de 4 baldes de antes, e
-    // uma face preenchida sob luz normal nunca lê `geometric` (só a versão
-    // sem luz e a aresta leem) — pular a conta aqui é o que mantém milhares
-    // de fragmentos de hachura no orçamento de `sceneMs`.
-    const geometric =
-      this.area && this.lit.lit ? GLYPH.BLANK : geometricGlyph(sample);
-
     shadeFragment(
       this.lit,
       this.material,
@@ -332,7 +329,6 @@ export class SurfacePen {
       this.normalY,
       this.normalZ,
       this.ownerId,
-      geometric,
       this.texture,
       this.area,
       out,
@@ -344,10 +340,17 @@ export class SurfacePen {
     // onde o glifo escolhido — escuro de propósito — não tem tinta. Ver
     // `Fragment.opaque`.
     out.opaque = this.area;
+    // Superfície de verdade, nunca incidência: sem isto, o `fuse` de um
+    // feixe desenhado antes no mesmo quadro vazaria para cá (o fragmento é
+    // reaproveitado) e uma parede comum passaria a se fundir com quem
+    // estivesse atrás dela em vez de bloquear.
+    out.fuse = false;
 
-    // O nível mais baixo da rampa clássica é o espaço: a célula não some,
-    // ela fica vazia. Descartar aqui poupa a escrita e o teste de
-    // profundidade de algo que o shader descartaria por cobertura zero.
+    // O nível mais baixo da cobertura é o espaço: a célula não some, ela
+    // fica vazia (é o que o chão usa; a hachura de face nunca chega lá,
+    // protegida por `MIN_FILL_COVERAGE`). Descartar aqui poupa a escrita e o
+    // teste de profundidade de algo que o shader descartaria por cobertura
+    // zero.
     return out.glyph !== GLYPH.SPACE && out.glyph !== GLYPH.BLANK;
   };
 }

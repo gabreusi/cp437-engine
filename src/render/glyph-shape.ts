@@ -90,6 +90,15 @@ export interface GlyphShapeEntry {
   readonly vector: Float32Array;
   /** Densidade média do glifo inteiro — a cobertura que o preenchimento usa. */
   readonly coverage: number;
+  /**
+   * Variância das seis amostras em torno de `coverage`.
+   *
+   * Um glifo "de bloco" preenche a célula de modo uniforme — as seis amostras
+   * concordam entre si, variância baixa, para qualquer cobertura. Uma letra
+   * fina discorda mais para a mesma cobertura média. É o que separa "áspero"
+   * de "liso" por medição em vez de lista (`buildChunkyPool`, `ramp.ts`).
+   */
+  readonly variance: number;
 }
 
 /** Raio de amostragem em pixels do atlas, em torno de cada ponto. */
@@ -160,41 +169,135 @@ export const buildShapeEntries = (
       coverageSum += density;
     }
 
-    return { glyph, vector, coverage: coverageSum / SAMPLE_COUNT };
+    const coverage = coverageSum / SAMPLE_COUNT;
+    let varianceSum = 0;
+    for (let i = 0; i < SAMPLE_COUNT; i += 1) {
+      const delta = vector[i]! - coverage;
+      varianceSum += delta * delta;
+    }
+
+    return { glyph, vector, coverage, variance: varianceSum / SAMPLE_COUNT };
   });
 };
 
-/**
- * O glifo candidato cujo vetor de seis dimensões mais se parece com o alvo.
- *
- * Força bruta: os conjuntos de candidatos são dezenas de glifos, não a CP437
- * inteira, e o artigo mede a mesma busca em menos de 0,15ms por 1000
- * consultas — não vale a complexidade de uma k-d tree para isto.
- */
-export const nearestGlyph = (
-  target: Float32Array,
+/** `entries`, ordenado por `coverage` ascendente — pré-requisito das buscas abaixo. */
+export const sortByCoverage = (
   entries: readonly GlyphShapeEntry[],
+): GlyphShapeEntry[] => [...entries].sort((a, b) => a.coverage - b.coverage);
+
+/** Primeira posição em `entries[lo,hi)` (ordenado por cobertura) com `coverage >= value`. */
+const lowerBound = (
+  entries: readonly GlyphShapeEntry[],
+  value: number,
+  lo: number,
+  hi: number,
+): number => {
+  let low = lo;
+  let high = hi;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (entries[mid]!.coverage < value) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+};
+
+/**
+ * O glifo de `entries` (ordenado por cobertura) cuja cobertura está mais
+ * perto de `target`, nunca abaixo de `minCoverage`.
+ *
+ * Busca binária: a posição de inserção mais a comparação dos dois vizinhos.
+ * Substitui o scan linear de antes — com o pool crescendo de dezenas para os
+ * ~256 glifos da CP437 inteira e a hachura de face gerando milhares de
+ * fragmentos por quadro, O(N) por fragmento deixaria de caber no orçamento;
+ * O(log N) faz o tamanho do pool parar de importar.
+ */
+export const nearestByCoverage = (
+  entries: readonly GlyphShapeEntry[],
+  target: number,
+  minCoverage: number,
+): number => {
+  const from = lowerBound(entries, minCoverage, 0, entries.length);
+  const start = Math.min(from, entries.length - 1);
+  const pos = lowerBound(entries, target, start, entries.length);
+
+  let bestGlyph = entries[start]!.glyph;
+  let bestDistance = Infinity;
+  if (pos > start) {
+    const below = entries[pos - 1]!;
+    const distance = Math.abs(below.coverage - target);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestGlyph = below.glyph;
+    }
+  }
+  if (pos < entries.length) {
+    const above = entries[pos]!;
+    const distance = Math.abs(above.coverage - target);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestGlyph = above.glyph;
+    }
+  }
+  return bestGlyph;
+};
+
+/**
+ * O glifo de `entries` (ordenado por cobertura) que melhor concilia a forma
+ * de `targetVector` com a cobertura-alvo `targetLevel`, ponderada por
+ * `weight` contra as seis dimensões de forma — `weight = 0` reduz ao
+ * casamento de forma puro, sem a luz opinar.
+ *
+ * Busca por janela, não pelo pool inteiro: o centro é a posição, no array
+ * ordenado por cobertura, da média ponderada entre a cobertura que a própria
+ * forma já sugere e o nível que a luz pede — é onde o mínimo da métrica
+ * combinada tende a estar. Só os `window` candidatos ao redor desse centro
+ * entram na distância de verdade, então o custo por fragmento não cresce com
+ * o tamanho do pool (crucial para aresta/disco: poucos fragmentos por
+ * quadro, mas cada um já pagava essa busca mesmo quando o resultado era
+ * descartado depois — ver `ramp.ts`).
+ */
+export const nearestWeightedGlyph = (
+  entries: readonly GlyphShapeEntry[],
+  targetVector: Float32Array,
+  targetLevel: number,
+  weight: number,
+  window: number,
 ): number => {
   if (entries.length === 0) {
-    throw new Error("nearestGlyph chamado sem candidatos.");
+    throw new Error("nearestWeightedGlyph chamado sem candidatos.");
   }
 
-  let bestGlyph = entries[0]!.glyph;
-  let bestDistance = Infinity;
+  let shapeCoverage = 0;
+  for (let i = 0; i < SAMPLE_COUNT; i += 1) shapeCoverage += targetVector[i]!;
+  shapeCoverage /= SAMPLE_COUNT;
 
-  for (const entry of entries) {
-    const vector = entry.vector;
+  const center = (shapeCoverage + weight * targetLevel) / (1 + weight);
+
+  const half = window >> 1;
+  const maxStart = Math.max(0, entries.length - window);
+  const start = Math.max(
+    0,
+    Math.min(lowerBound(entries, center, 0, entries.length) - half, maxStart),
+  );
+  const end = Math.min(entries.length, start + window);
+
+  let bestGlyph = entries[start]!.glyph;
+  let bestDistance = Infinity;
+  for (let i = start; i < end; i += 1) {
+    const entry = entries[i]!;
     let distance = 0;
-    for (let i = 0; i < SAMPLE_COUNT; i += 1) {
-      const delta = target[i]! - vector[i]!;
+    for (let k = 0; k < SAMPLE_COUNT; k += 1) {
+      const delta = targetVector[k]! - entry.vector[k]!;
       distance += delta * delta;
     }
+    const levelDelta = targetLevel - entry.coverage;
+    distance += weight * levelDelta * levelDelta;
     if (distance < bestDistance) {
       bestDistance = distance;
       bestGlyph = entry.glyph;
     }
   }
-
   return bestGlyph;
 };
 

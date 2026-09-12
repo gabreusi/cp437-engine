@@ -67,6 +67,13 @@ export interface Occluder {
    * exatamente "rotaciona por yaw e pitch e translada" em forma fechada.
    */
   toLocal: Mat4;
+  /**
+   * Raio da esfera que envolve a caixa inteira, recalculado uma vez por
+   * quadro em `LightWorld.finalize()`. Dá escala ao bias de autossombra da
+   * caixa (`SELF_SHADOW_FRACTION` em `trace.ts`) sem um valor mágico fixo.
+   * Ignorado por esferas.
+   */
+  boundRadius: number;
   /** O que um raio de reflexão enxerga ao acertar este corpo. */
   tint: Rgb;
   castsShadow: boolean;

@@ -40,6 +40,7 @@ rode depois de qualquer alteração. `tsconfig` é estrito de verdade:
 ```
 scene.contribute(ctx)  → LightWorld (luzes + occluders), antes de qualquer desenho
 scene.render(ctx)      → primitivas em coordenadas de MUNDO
+scene.render(ctx) fase 2 → renderGlow(ctx): incidência sobre o que já foi desenhado
 Rasterizer (CPU)       → view → clip near → projeção → célula → clip 2D → DDA
 SurfacePen.style       → shadeSurface (ambiente + luzes + sombra + reflexo)
 ramp                   → luminância + textura → glifo
@@ -50,8 +51,12 @@ GlPresenter (GPU)      → background → grid → bloom → composite
 ## Contratos que todo código novo respeita
 
 **`Renderable` (`scene/scene.ts`)** — `contribute?(ctx)` registra luz/corpo,
-`render(ctx)` desenha. Nunca desenhe em `contribute`, nunca registre luz em
-`render`: iluminação não pode depender da ordem da lista da cena.
+`render(ctx)` desenha, `renderGlow?(ctx)` tinge por cima do que `render` de
+*toda* a cena já desenhou naquele quadro. Nunca desenhe em `contribute`, nunca
+registre luz em `render`: iluminação não pode depender da ordem da lista da
+cena. Pelo mesmo motivo, nada que dependa de encontrar superfície já desenhada
+(`Fragment.fuse`) vai em `render` — só em `renderGlow`, senão o resultado muda
+conforme a ordem dos objetos.
 
 **`RenderContext`** — `{ camera, viewport, rasterizer, time, lights, shading }`.
 Reaproveitado; não guarde referência entre quadros.
@@ -65,8 +70,10 @@ face sólida é `hatch.ts` repetindo linhas na densidade que a tela pede.
 
 **`SurfacePen` (`render/shading.ts`)** — a ponte luz→caractere. Segura
 `material`, `normal(x,y,z)`, `ownerId` (para não se auto-sombrear), `texture`,
-`area` (face preenchida usa a rampa inteira; aresta usa rampa por família),
-`fogged`, e o gancho `beforeShade` (só o chão usa). Entrega `pen.style` ao
+`area` (face preenchida busca só por cobertura medida no pool inteiro da
+textura; aresta busca por forma *e* cobertura juntas, ponderadas por
+`settings.rampWeight` — um peso contínuo, não um switch de modos), `fogged`,
+e o gancho `beforeShade` (só o chão usa). Entrega `pen.style` ao
 rasterizador. `begin(ctx)` uma vez por quadro.
 
 **`LightWorld` (`light/world.ts`)** — pool. `begin()` zera contadores,
@@ -75,12 +82,23 @@ todos os campos**, o anterior ainda está lá.
 
 **`EntityKindDef` (`scene/entities/entity.ts`)** — tipo de objeto = dado
 (`EntityState`, um formato só) + comportamento no registro `ENTITY_KINDS`
-(`scene/world.ts`): `defaults`, `contribute`, `render`, `fields`, `uniformSize`.
+(`scene/world.ts`): `defaults`, `contribute`, `render`, `renderGlow?`,
+`fields`, `uniformSize`.
 
 **`Framebuffer`** — `plot()` faz o teste de profundidade com tolerância
 (`DEPTH_TOLERANCE`; sem ela a grade sai picotada). `isEmpty()` lê o **alpha**,
 não a profundidade. Valores acima de 1.0 vão para o canal emissivo
 (`EMISSIVE_RANGE = 4`), via `writeHdrColor` — é o que vira halo no bloom.
+`fuse=true` muda o que acontece ao vencer o teste: em vez de substituir glifo
+e `opaque`, soma cor e emissivo sobre o que já está na célula — é como um
+feixe de luz ilumina uma parede em vez de apagá-la (ver `Fragment.fuse` e
+`spotlight.ts`). Fora do `fuse`, `opaque` ainda é **pegajoso** quando as duas
+profundidades coincidem (mesma superfície, tolerância de `DEPTH_TOLERANCE`):
+uma aresta desenhada em cima da própria hachura não some o `opaque` dela só
+por vencer o empate. Uma profundidade genuinamente diferente não herda nada —
+decide sozinha. Todo corpo sólido sem hachura por baixo (disco do orbe, disco
+do holofote) tem que passar `opaque=true` explicitamente: não há nada para
+herdar de.
 
 ## Invariantes que quebram em silêncio
 
@@ -96,6 +114,11 @@ não a profundidade. Valores acima de 1.0 vão para o canal emissivo
   recalcule o céu num segundo lugar — o reflexo e o fundo divergiriam.
 - Alinhamento horizonte/bruma depende de `Math.round(horizonRow())` casar entre
   `Sky.drawHorizon`, `Ground` e `updateAtmosphere` em `main.ts`.
+- **Sombra de caixa consigo mesma usa um bias maior, não o corte de sempre**
+  (`light/trace.ts`, `SELF_SHADOW_FRACTION`). Ignorar o próprio corpo inteiro
+  (o que ainda acontece para esfera) impede a caixa de bloquear luz para a
+  sua própria parede oposta — some quando visto de fora, mas de dentro de uma
+  sala o sol atravessa a parede como se ela não existisse.
 - Ruído de textura irregular é ancorado em **posição de mundo quantizada**, nunca
   em célula de tela.
 - `webglcontextlost` é tratado desde o começo (`gl/context.ts`); recursos são
@@ -113,6 +136,7 @@ não a profundidade. Valores acima de 1.0 vão para o canal emissivo
 | escolha de glifo por forma (aresta, disco, cobertura de preenchimento) | `render/glyph-shape.ts` (amostragem, contraste, vizinho mais próximo) + candidatos em `render/ramp.ts` |
 | matemática de luz | `light/shade.ts` (kernel) e `light/trace.ts` (raio×esfera/caixa) |
 | gesto de edição | `ui/manipulator.ts` (um só, para menu e editor) |
+| efeito de luz que tinge em vez de desenhar (feixe, poeira) | `Fragment.fuse` no `SurfaceStyle` + hook `renderGlow` do `EntityKindDef` (ver `spotlight.ts`) |
 
 O atlas tem 256 glifos na ordem da **CP437 real** — `render/palette.ts` monta
 `CHARSET` como essa tabela, e `glyphForChar` traduz caractere → índice por

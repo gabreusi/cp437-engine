@@ -12,6 +12,8 @@ export const ENTITY = {
   MONOLITH: "monolith",
   /** Placa refletiva. É onde o raio de espelho tem o que mostrar. */
   PANEL: "panel",
+  /** Cone de luz configurável: alcance, cor e abertura do feixe. */
+  SPOTLIGHT: "spotlight",
 } as const;
 
 export type EntityKind = (typeof ENTITY)[keyof typeof ENTITY];
@@ -52,8 +54,10 @@ export interface EntityState {
   color: Rgb;
   /** Orbe: força da luz. Demais: brilho próprio das arestas. */
   intensity: number;
-  /** Alcance da luz do orbe, em unidades de mundo. */
+  /** Alcance da luz do orbe/holofote, em unidades de mundo. */
   range: number;
+  /** Abertura do feixe do holofote, em radianos, borda a borda. Demais tipos ignoram. */
+  coneAngle: number;
 
   reflectivity: number;
   gloss: number;
@@ -130,6 +134,16 @@ export interface EntityKindDef {
     context: RenderContext,
     pen: SurfacePen,
   ) => void;
+  /**
+   * Incidência sobre o que `render` de todo mundo já desenhou neste quadro —
+   * ver `Renderable.renderGlow`. Só o holofote usa hoje, para o feixe: a
+   * carcaça continua em `render`, porque é corpo de verdade, não luz.
+   */
+  renderGlow?: (
+    entity: EntityState,
+    context: RenderContext,
+    pen: SurfacePen,
+  ) => void;
   /** Só os campos que significam alguma coisa para este tipo. */
   fields: readonly EntityField[];
   /**
@@ -160,6 +174,7 @@ export const createEntity = (
   color: rgb(1, 1, 1),
   intensity: 1,
   range: 26,
+  coneAngle: (35 * Math.PI) / 180,
   reflectivity: 0,
   gloss: 40,
   texture: TEXTURE.SMOOTH,
@@ -221,7 +236,7 @@ const DEGREES = 180 / Math.PI;
 export const ROTATION_FIELDS: readonly EntityField[] = [
   {
     kind: "number",
-    label: "Rotation",
+    label: "Yaw",
     min: -180,
     max: 180,
     step: 1,
@@ -233,7 +248,7 @@ export const ROTATION_FIELDS: readonly EntityField[] = [
   },
   {
     kind: "number",
-    label: "Yaw",
+    label: "Pitch",
     min: -90,
     max: 90,
     step: 1,

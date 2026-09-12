@@ -31,6 +31,22 @@ const PARALLEL_EPSILON = 1e-9;
  */
 export const SHADOW_BIAS = 2e-3;
 
+/**
+ * Bias extra para uma caixa se sombrear com ela mesma, além de `SHADOW_BIAS`.
+ *
+ * Ignorar o próprio corpo inteiro resolveria o acne da face que emitiu o
+ * raio, mas também impede a caixa de bloquear luz para a sua própria parede
+ * *oposta* — invisível vista de fora (as duas faces nunca aparecem ao mesmo
+ * tempo), mas óbvio de dentro de uma sala fechada: o sol atravessa a caixa
+ * inteira e ilumina o interior como se a parede não existisse. Uma fração do
+ * raio da esfera envolvente (`Occluder.boundRadius`) separa os dois casos sem
+ * um valor mágico fixo: o acne mora na escala de erro de ponto flutuante,
+ * bem abaixo disto; a parede oposta de verdade mora na escala do próprio
+ * corpo, bem acima. Só se aplica a caixa — uma esfera não tem "parede
+ * oposta" para distinguir do próprio acne, e continua no corte de sempre.
+ */
+const SELF_SHADOW_FRACTION = 0.02;
+
 /** Distância até a esfera, ou -1. O raio precisa ter direção unitária. */
 export const raySphere = (
   ox: number,
@@ -182,10 +198,18 @@ export const occluded = (
 ): boolean => {
   for (let index = 0; index < world.occluderCount; index += 1) {
     const occluder = world.occluder(index);
-    if (!occluder.castsShadow || occluder.ownerId === ignoreId) continue;
+    if (!occluder.castsShadow) continue;
+
+    const isSelf = occluder.ownerId === ignoreId;
+    // Esfera não distingue acne de sombra própria de verdade (ver
+    // `SELF_SHADOW_FRACTION`) — continua ignorando o próprio corpo inteiro.
+    if (isSelf && occluder.kind !== OCCLUDER.BOX) continue;
 
     const hit = rayOccluder(ox, oy, oz, dx, dy, dz, occluder);
-    if (hit > SHADOW_BIAS && hit < maxDistance) return true;
+    const bias = isSelf
+      ? Math.max(SHADOW_BIAS, occluder.boundRadius * SELF_SHADOW_FRACTION)
+      : SHADOW_BIAS;
+    if (hit > bias && hit < maxDistance) return true;
   }
   return false;
 };
@@ -212,10 +236,16 @@ export const traceNearest = (
 
   for (let index = 0; index < world.occluderCount; index += 1) {
     const occluder = world.occluder(index);
-    if (occluder.ownerId === ignoreId) continue;
+    const isSelf = occluder.ownerId === ignoreId;
+    // Mesmo corte de `occluded`: esfera não tem "lado oposto" para separar
+    // de acne, caixa tem — ver `SELF_SHADOW_FRACTION`.
+    if (isSelf && occluder.kind !== OCCLUDER.BOX) continue;
 
     const hit = rayOccluder(ox, oy, oz, dx, dy, dz, occluder);
-    if (hit > SHADOW_BIAS && hit < bestDistance) {
+    const bias = isSelf
+      ? Math.max(SHADOW_BIAS, occluder.boundRadius * SELF_SHADOW_FRACTION)
+      : SHADOW_BIAS;
+    if (hit > bias && hit < bestDistance) {
       bestDistance = hit;
       best = occluder;
     }

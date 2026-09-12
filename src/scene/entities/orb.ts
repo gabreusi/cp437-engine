@@ -2,7 +2,7 @@ import { copyRgb, luminance, type Rgb, rgb, scaleRgb } from "../../math/color";
 import { copy } from "../../math/vec3";
 import { LIGHT, OCCLUDER } from "../../light/types";
 import type { LightWorld } from "../../light/world";
-import { glyphForDiscShape, glyphForLuminance } from "../../render/ramp";
+import { glyphForDiscEdge } from "../../render/ramp";
 import { CELL_ASPECT } from "../../render/viewport";
 import { createProjected } from "../../render/rasterizer";
 import type { SurfacePen } from "../../render/shading";
@@ -79,11 +79,11 @@ export const orbKind: EntityKindDef = {
     if (radiusRows < 0.7) {
       // Longe demais para ter área: uma célula acesa ainda lê como ponto
       // de luz, e sumir seria pior do que isso.
-      rasterizer.plot(projected, "*".charCodeAt(0), entity.color, 1, base);
+      rasterizer.plot(projected, "*".charCodeAt(0), entity.color, 1, base, true);
       return;
     }
 
-    const { rampMode, rampExposure } = pen.lit;
+    const { rampWeight, rampExposure } = pen.lit;
     const radiusCols = radiusRows * CELL_ASPECT;
 
     rasterizer.disc(
@@ -102,16 +102,24 @@ export const orbKind: EntityKindDef = {
         rasterizer.plotCell(
           col,
           row,
-          glyphForLuminance(
+          glyphForDiscEdge(
             brightness,
-            glyphForDiscShape(nx, ny, radiusCols, radiusRows),
-            rampMode,
+            nx,
+            ny,
+            radiusCols,
+            radiusRows,
+            rampWeight,
             rampExposure,
           ),
           tint,
           depth,
           1,
           peak - 1,
+          // Corpo sólido, não traço: sem isto, o glifo esparso da borda do
+          // disco (a franja escurecendo para fora) deixa passar o que está
+          // atrás — a mesma janela indevida das arestas do monólito, só que
+          // aqui o "vão entre a tinta" é o próprio degradê da esfera.
+          true,
         );
       },
     );

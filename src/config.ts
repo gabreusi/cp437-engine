@@ -6,7 +6,7 @@
  * quando não existia câmera. Horizonte agora é para onde a câmera olha, e o sol
  * tem elevação e azimute como qualquer corpo celeste.
  */
-import { type RampMode, type SurfaceTexture, TEXTURE } from "./render/ramp";
+import { type SurfaceTexture, TEXTURE } from "./render/ramp";
 
 export interface Settings {
   fovDegrees: number;
@@ -80,8 +80,8 @@ export interface Settings {
   groundFillLight: number;
   /** Expoente do lóbulo da grade. Baixo espalha o sol numa coluna larga. */
   groundGloss: number;
-  /** Como a luz escolhe o caractere: rampa clássica, por família, ou nunca. */
-  glyphRamp: RampMode;
+  /** Quanto a luz pode vencer a forma na escolha do glifo de aresta/disco. Zero é só geometria. */
+  rampWeight: number;
   /** Exposição da rampa: onde a luminância vira caractere cheio. */
   rampExposure: number;
   /** Teto de luzes que projetam sombra num mesmo fragmento. */
@@ -98,35 +98,35 @@ export const settings: Settings = {
   moveSpeed: 12,
   lookSensitivity: 0.0022,
 
-  gridSize: 8,
+  gridSize: 16,
   gridTexture: TEXTURE.SMOOTH,
   viewDistance: 300,
 
   fogDensity: 0.6,
   fogEnabled: true,
-  groundHaze: 0.45,
+  groundHaze: 0.35,
 
-  sunEnabled: true,
+  sunEnabled: false,
   sunElevation: 4,
   sunAzimuth: 0,
   sunAngularSize: 13,
   sunSlices: 1.1,
 
-  starCount: 1600,
+  starCount: 500,
 
   lightingEnabled: true,
   shadowsEnabled: true,
   reflectionsEnabled: true,
-  ambientLevel: 0.10,
-  gridGlow: 0.5,
+  ambientLevel: 0.05,
+  gridGlow: 0.1,
   sunLightIntensity: 1,
-  skyReflectionIntensity: 1,
-  groundReflectivity: 0.55,
-  groundFillLight: 0.22,
-  groundGloss: 26,
-  glyphRamp: "classic",
-  rampExposure: 0.75,
-  maxShadowLights: 3,
+  skyReflectionIntensity: 0.3,
+  groundReflectivity: 1,
+  groundFillLight: 0.62,
+  groundGloss: 2,
+  rampWeight: 10,
+  rampExposure: 0.5,
+  maxShadowLights: 8,
 
   bloomIntensity: 0.1,
   bloomRadius: 1.2,

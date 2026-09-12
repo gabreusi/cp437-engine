@@ -69,6 +69,15 @@ export class Editor {
     return this.cursor.row;
   }
 
+  /** Posição exata do cursor, para mira e slider — ver `Cursor.exactCol`. */
+  private get exactCol(): number {
+    return this.cursor.exactCol;
+  }
+
+  private get exactRow(): number {
+    return this.cursor.exactRow;
+  }
+
   update(
     events: UiEvents,
     viewport: Viewport,
@@ -122,6 +131,7 @@ export class Editor {
 
     if (insidePanel) {
       this.handlePanel(events, layout);
+      this.handlePanelKeys(events);
       return;
     }
 
@@ -179,13 +189,29 @@ export class Editor {
       (events.pressed || this.draggingSlider === index)
     ) {
       const ratio =
-        (this.col - layout.trackCol) / Math.max(1, layout.trackWidth - 1);
+        (this.exactCol - layout.trackCol) / Math.max(1, layout.trackWidth - 1);
       item.set(
         clampToRange(
           item.min + clamp(ratio, 0, 1) * (item.max - item.min),
           item,
         ),
       );
+    }
+  }
+
+  /**
+   * As setas ajustam o item sob o cursor, sem exigir arrasto — a mesma
+   * `adjustItem` que o menu de pausa usa nas suas, ver `model.ts`. Faltava
+   * aqui: o painel do editor só respondia ao clique na trilha, e ela é larga
+   * demais em cliques (poucas colunas) para posicionar um objeto com cuidado.
+   */
+  private handlePanelKeys(events: UiEvents): void {
+    const item = this.items[this.hoverItem];
+    if (item === undefined) return;
+
+    for (const code of events.keys) {
+      if (code === "ArrowLeft") adjustItem(item, -1, events.shift);
+      if (code === "ArrowRight") adjustItem(item, 1, events.shift);
     }
   }
 
@@ -220,8 +246,8 @@ export class Editor {
         lights,
         camera,
         rasterizer,
-        this.col,
-        this.row,
+        this.exactCol,
+        this.exactRow,
       );
       this.scroll = 0;
       return;
@@ -241,8 +267,8 @@ export class Editor {
       this.world,
       camera,
       rasterizer,
-      this.col,
-      this.row,
+      this.exactCol,
+      this.exactRow,
       events.deltaX / viewport.cellWidth,
       events.deltaY / viewport.cellHeight,
       events.shift,
@@ -270,7 +296,7 @@ export class Editor {
       framebuffer,
       2,
       viewport.rowCount - 2,
-      "Tab fly   right button look   click select   wheel turn   ◄► drag arrows to resize   Del remove",
+      "Tab fly   right button look   click select   wheel turn   panel ◄► adjust   drag arrows to resize   Del remove",
       MENU_COLORS.DIM,
     );
   }

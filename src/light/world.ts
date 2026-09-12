@@ -27,6 +27,7 @@ const createOccluder = (): Occluder => ({
   radius: 1,
   half: vec3(1, 1, 1),
   toLocal: mat4.identity(mat4.create()),
+  boundRadius: 0,
   tint: rgb(),
   castsShadow: true,
   ownerId: -1,
@@ -127,9 +128,31 @@ export class LightWorld {
     occluder.radius = 1;
     set(occluder.half, 1, 1, 1);
     mat4.identity(occluder.toLocal);
+    occluder.boundRadius = 0;
     setRgb(occluder.tint, 0, 0, 0);
     occluder.castsShadow = true;
     occluder.ownerId = ownerId;
     return occluder;
+  }
+
+  /**
+   * Pré-calcula o raio da esfera que envolve cada caixa — escala do bias de
+   * autossombra em `trace.ts` (`SELF_SHADOW_FRACTION`). Uma vez aqui evita
+   * recalcular a mesma raiz quadrada em cada um dos milhares de raios que
+   * testam a mesma parede no mesmo quadro.
+   *
+   * Chamado depois que todo `contribute()` do quadro terminou: só então
+   * `half` de toda caixa está definitivo.
+   */
+  finalize(): void {
+    for (let index = 0; index < this.occluders; index += 1) {
+      const occluder = this.occluderPool[index]!;
+      if (occluder.kind !== OCCLUDER.BOX) continue;
+
+      const { half } = occluder;
+      occluder.boundRadius = Math.sqrt(
+        half.x * half.x + half.y * half.y + half.z * half.z,
+      );
+    }
   }
 }

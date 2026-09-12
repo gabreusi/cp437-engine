@@ -2,7 +2,7 @@ node_modules/
 dist/
 *.local
 .DS_Store
-TODO.md
+
 # Config local de editor/ferramenta (específica desta máquina)
 .idea/
 .claude/settings.local.json

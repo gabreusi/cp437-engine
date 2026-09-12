@@ -26,6 +26,9 @@ import { MENU_COLORS } from "./menu/draw";
  *
  * O que muda entre os dois é só de onde vêm a célula e o deslocamento; por isso
  * tudo aqui é escrito em células de tela, e quem chama converte.
+ *
+ * `col`/`row` chegam fracionários, não a célula arredondada: é o que faz a
+ * mira e o arrasto seguirem o mouse em vez de saltar de célula em célula.
  */
 
 /** Passo de giro por clique de roda, em radianos. */
@@ -213,7 +216,7 @@ export class Manipulator {
     }
 
     const { position } = camera;
-    rasterizer.rayThrough(col + 0.5, row + 0.5, this.ray);
+    rasterizer.rayThrough(col, row, this.ray);
     const hit = world.pick(
       lights,
       position.x,
@@ -273,7 +276,7 @@ export class Manipulator {
     planeY: number,
     out: Vec3,
   ): boolean {
-    rasterizer.rayThrough(col + 0.5, row + 0.5, this.ray);
+    rasterizer.rayThrough(col, row, this.ray);
     if (Math.abs(this.ray.y) < 1e-4) return false;
 
     const { position } = camera;

@@ -7,28 +7,31 @@ import type { SurfaceStyle } from "../render/rasterizer";
 import { SurfacePen } from "../render/shading";
 import { BoxShape } from "./entities/box";
 import {
+  createEntity,
   ENTITY,
   type EntityKind,
   type EntityKindDef,
   type EntityState,
-  createEntity,
   reserveIds,
 } from "./entities/entity";
 import { monolithKind } from "./entities/monolith";
 import { orbKind } from "./entities/orb";
 import { panelKind } from "./entities/panel";
-import type { RenderContext, Renderable } from "./scene";
+import { spotlightKind } from "./entities/spotlight";
+import type { Renderable, RenderContext } from "./scene";
 
 export const ENTITY_KINDS: Record<EntityKind, EntityKindDef> = {
   [ENTITY.ORB]: orbKind,
   [ENTITY.MONOLITH]: monolithKind,
   [ENTITY.PANEL]: panelKind,
+  [ENTITY.SPOTLIGHT]: spotlightKind,
 };
 
 export const ENTITY_ORDER: readonly EntityKind[] = [
   ENTITY.ORB,
   ENTITY.MONOLITH,
   ENTITY.PANEL,
+  ENTITY.SPOTLIGHT,
 ];
 
 const STORAGE_KEY = "cp437-engine/scene";
@@ -89,6 +92,11 @@ export class World implements Renderable {
     copyRgb(out.color, this.selectionTint);
     out.alpha = 1;
     out.emissive = this.selectionPulse;
+    // Interface, não incidência: sem isto herdaria `fuse` de um feixe
+    // desenhado antes no mesmo quadro (o fragmento é reaproveitado) e a
+    // caixa de seleção passaria a tingir o que está atrás em vez de riscar
+    // por cima, do jeito que sempre desenhou.
+    out.fuse = false;
     return sample.depth > 0;
   };
 
@@ -139,6 +147,14 @@ export class World implements Renderable {
 
     const selected = this.editing ? this.selected : null;
     if (selected !== null) this.drawSelection(selected, context);
+  }
+
+  /** Segunda passada: feixes e outros efeitos que tingem em vez de desenhar. */
+  renderGlow(context: RenderContext): void {
+    for (const entity of this.entities) {
+      if (!entity.visible) continue;
+      ENTITY_KINDS[entity.kind].renderGlow?.(entity, context, this.pen);
+    }
   }
 
   /** A órbita escreve em `current`, nunca em `position`. */
@@ -223,10 +239,12 @@ export class World implements Renderable {
   /**
    * Cena de demonstração.
    *
-   * Três orbes coloridos em órbitas diferentes, três monólitos entre eles e o
-   * chão, e um painel virado para o sol. Cada peça existe para provar uma
-   * parte: os orbes são a luz colorida, os monólitos são a sombra, o painel é
-   * o reflexo com raio de verdade.
+   * Terreno aberto, sem sala nenhuma: o custo de sombra escala com o número de
+   * oclusores, e uma dúzia de paredes finas testadas por raio a cada quadro
+   * pesava mais do que qualquer coisa que elas escondiam. Um trio de
+   * monólitos basta para a mesma prova — cada um com seu orbe em órbita,
+   * o do meio também sob três holofotes RGB convergindo (mistura aditiva de
+   * cor), e um painel espelhado do lado para mostrar o reflexo de verdade.
    */
   loadDemo(): void {
     this.entities.length = 0;
@@ -250,42 +268,140 @@ export class World implements Renderable {
       entity.color.b = color[2];
       entity.orbitRadius = orbitRadius;
       entity.orbitSpeed = speed;
+      entity.size["x"] = 1;
+      entity.range = 50;
     };
-
-    orb(0, 7, -34, [0.15, 0.95, 1], 16, 0.35, "Cyan Orb");
-    orb(0, 5.5, -46, [1, 0.25, 0.75], 24, -0.22, "Magenta Orb");
-    orb(-8, 9, -24, [0.5, 1, 0.55], 11, 0.5, "Green Orb");
 
     const monolith = (
       x: number,
       z: number,
-      height: number,
+      halfHeight: number,
       name: string,
-    ): void => {
+    ): EntityState => {
       const entity = this.add(ENTITY.MONOLITH);
       entity.name = name;
       entity.position.x = x;
-      entity.position.y = height;
+      entity.position.y = halfHeight;
       entity.position.z = z;
-      entity.size.y = height;
-      entity.yaw = (x + z) * 0.03;
+      entity.size.x = 1;
+      entity.size.y = halfHeight;
+      entity.size.z = 1;
+      return entity;
     };
 
-    monolith(12, -32, 7, "Monolith east");
-    monolith(-16, -44, 10, "Monolith west");
-    monolith(4, -58, 5, "Monolith north");
+    const spot = (
+      x: number,
+      y: number,
+      z: number,
+      yawDeg: number,
+      pitchDeg: number,
+      color: [number, number, number],
+      intensity: number,
+      range: number,
+      coneAngleDeg: number,
+      name: string,
+    ): void => {
+      const entity = this.add(ENTITY.SPOTLIGHT);
+      entity.name = name;
+      entity.position.x = x;
+      entity.position.y = y;
+      entity.position.z = z;
+      entity.yaw = (yawDeg * Math.PI) / 180;
+      entity.pitch = (pitchDeg * Math.PI) / 180;
+      entity.color.r = color[0];
+      entity.color.g = color[1];
+      entity.color.b = color[2];
+      entity.intensity = intensity;
+      entity.range = range;
+      entity.coneAngle = (coneAngleDeg * Math.PI) / 180;
+    };
 
-    // O painel fica de lado e virado para dentro: é a orientação em que o
-    // olhar do jogador, espelhado nele, sai na direção do sol e dos
-    // monólitos. De frente ele refletiria o céu vazio atrás da câmera.
+    // --- Trio de monólitos: o do meio é o palco da mistura de cor, os dois
+    // de lado só vivem da própria luz orbitando. ---
+    const hero = monolith(0, -5, 1.5, "Hero monolith");
+    const west = monolith(-16, -34, 5, "West monolith");
+    const east = monolith(16, -34, 5, "East monolith");
+
+    hero.texture = "smooth";
+    hero.reflectivity = 1;
+    hero.gloss = 200;
+    hero.color.r = 1;
+    hero.color.g = 1;
+    hero.color.b = 1;
+
+    orb(
+      west.position.x,
+      7,
+      west.position.z,
+      [0.65, 0.35, 1],
+      3.5,
+      -0.3,
+      "West orb",
+    );
+    orb(
+      east.position.x,
+      7,
+      east.position.z,
+      [0.2, 1, 0.85],
+      3.5,
+      0.3,
+      "East orb",
+    );
+
+    // --- Três holofotes RGB convergindo no monólito central. ---
+    spot(
+      -5,
+      8.3,
+      hero.position.z + 6,
+      -35,
+      -55,
+      [1, 0, 0],
+      15,
+      80,
+      45,
+      "Red spotlight",
+    );
+    spot(
+      5,
+      8.3,
+      hero.position.z + 6,
+      35,
+      -55,
+      [0, 1, 0],
+      15,
+      80,
+      45,
+      "Green spotlight",
+    );
+    spot(
+      0,
+      8.3,
+      hero.position.z - 6,
+      180,
+      -55,
+      [0, 0, 1],
+      15,
+      80,
+      45,
+      "Blue spotlight",
+    );
+
+    // --- Painel espelhado, de lado: reflete a mistura de cor e os orbes. ---
     const panel = this.add(ENTITY.PANEL);
     panel.name = "Reflective panel";
-    panel.position.x = -16;
-    panel.position.y = 7;
-    panel.position.z = -30;
-    panel.size.x = 8;
-    panel.size.y = 6;
-    panel.yaw = 1.15;
+    panel.position.x = 9;
+    panel.position.y = 4.5;
+    panel.position.z = -2;
+    panel.size.x = 4;
+    panel.size.y = 3;
+    panel.size.z = 0.2;
+    panel.yaw = (-50 * Math.PI) / 85;
+    panel.color.r = 0.75;
+    panel.color.g = 0.85;
+    panel.color.b = 1;
+    panel.reflectivity = 0.9;
+    panel.gloss = 220;
+    panel.mirror = true;
 
     this.selectedId = null;
   }

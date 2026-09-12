@@ -1,6 +1,6 @@
 import { type Settings, settings } from "../../config";
 import type { EntityField, EntityState } from "../../scene/entities/entity";
-import { RAMP_MODES, TEXTURES } from "../../render/ramp";
+import { TEXTURES } from "../../render/ramp";
 import { ENTITY_KINDS, ENTITY_ORDER, type World } from "../../scene/world";
 import type { MenuGroup, MenuItem } from "./model";
 
@@ -61,12 +61,6 @@ const TEXTURE_LABELS: Record<string, string> = {
   smooth: "Smooth",
   rough: "Rough",
   irregular: "Irregular",
-};
-
-const RAMP_LABELS: Record<string, string> = {
-  classic: "Classic",
-  family: "By family",
-  off: "OFF",
 };
 
 export const buildGroups = (world: World): MenuGroup[] => [
@@ -255,18 +249,14 @@ export const buildGroups = (world: World): MenuGroup[] => [
         step: 1,
       }),
       { kind: "heading", label: "Character Set" },
-      {
-        kind: "choice",
-        label: "Ramp",
-        options: RAMP_MODES.map((mode) => ({
-          value: mode,
-          label: RAMP_LABELS[mode] ?? mode,
-        })),
-        get: () => settings.glyphRamp,
-        set: (value) => {
-          settings.glyphRamp = value as Settings["glyphRamp"];
-        },
-      },
+      slider({
+        key: "rampWeight",
+        label: "Ramp weight",
+        min: 0,
+        max: 10,
+        step: 0.2,
+        digits: 1,
+      }),
       slider({
         key: "rampExposure",
         label: "Exposure",

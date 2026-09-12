@@ -186,6 +186,23 @@ completa, só para quem passou. Não é uma aproximação escrita à parte — �
 função com uma opção a menos, e por isso não pode discordar da versão completa. É
 o que faz o chão inteiro preenchido custar menos de um milissegundo a mais.
 
+**Uma caixa pode bloquear luz para a própria parede oposta.** O raio de
+sombra de uma superfície ignora o corpo que a representa — sem isso a
+primeira coisa que ele acerta é a própria face que o emitiu, e a cena inteira
+sai em sombra, o acne clássico. Ignorar o corpo inteiro resolve isso, mas
+resolve rápido demais: uma caixa também para de bloquear luz para a sua
+própria parede *oposta*, porque as duas são o mesmo `ownerId`. Isso não
+aparece de fora — as duas faces de uma caixa nunca são vistas ao mesmo tempo
+— mas fica óbvio de dentro de uma sala fechada, olhando para uma parede
+iluminada por um sol que deveria estar bloqueado pela parede do lado de fora:
+a caixa inteira vira vidro para a própria luz. A correção não é abandonar o
+corte, é dar um raio a mais: perto da face que emitiu o raio (a escala do
+erro de ponto flutuante, a mesma de sempre) continua ignorado; a partir de
+uma fração do tamanho do próprio corpo — bem menor que a "sala", bem maior
+que o acne — o raio volta a valer, e a parede oposta volta a bloquear. Uma
+esfera não ganha esse raio a mais: não tem "lado oposto" para separar de
+acne, e continua no corte de sempre.
+
 **Sólido é a face preenchida, não uma primitiva nova.** A engine só sabe desenhar
 linha, então uma superfície opaca é uma face hachurada com linhas próximas o
 bastante para não sobrar buraco — exatamente como o painel refletivo sempre foi
@@ -198,21 +215,58 @@ células decidida por ordem de desenho em vez de por distância. As doze arestas
 continuam sendo desenhadas por cima, com a normal da costura de cada uma — elas
 são a silhueta.
 
-**Uma área preenchida não usa a rampa por família.** As quatro famílias existem
-para uma linha continuar sendo linha sob luz forte; o interior de uma face não
-tem silhueta para preservar, e ali o traço é meio e não fim. Área usa a rampa
-inteira da textura, que é o que descreve superfície — e nunca o nível mais baixo,
-porque o espaço deixaria um buraco no meio de um corpo sólido. O chão preenchido
-é o caso oposto e usa o nível vazio de propósito: é assim que uma poça de luz tem
-borda em vez de retângulo.
+**Um efeito de luz tinge a célula, não a substitui.** O framebuffer guarda um
+glifo e uma cor por célula, e a regra de sempre é "quem está mais perto vence
+inteiro" — certa para duas superfícies, errada para um feixe de holofote ou
+poeira em suspensão, que não têm corpo próprio e vencer o teste de
+profundidade só significa "esta luz incide aqui". Sem distinguir os dois
+casos, um feixe que passa raspando uma parede ganhava a célula por inteiro:
+trocava o glifo da parede pelo próprio ponto, e — pior — apagava a marca de
+"corpo sólido" (ver acima) que a parede tinha deixado, abrindo um buraco para
+o céu bem no meio do objeto. `Fragment.fuse` existe para esse caso: em vez de
+substituir, soma cor e emissivo sobre o que já estiver na célula, preservando
+o glifo e a opacidade de quem estava lá. Por isso o feixe vive numa segunda
+passada (`renderGlow`, depois de `render` de toda a cena) — só assim ele
+sempre encontra a parede já desenhada, não importa a ordem em que os dois
+objetos foram criados.
 
-**O nível de uma rampa é medido, não suposto.** `" .:-=+*#%@$"` está nessa
-ordem porque parece certa, mas ninguém tinha conferido: o índice de um
-fragmento preenchido virou uma busca pelo glifo, dentro da rampa, cuja
-cobertura real no atlas (mesma medição de seis amostras do casamento de
-forma, reduzida a uma média) está mais perto do nível-alvo — a rampa continua
-a mesma sequência de sempre, só que a posição de cada caractere nela para de
-ser um palpite.
+**"Corpo sólido" não pode sumir só porque outra coisa desenhou por cima.** O
+mesmo "quem está mais perto vence inteiro" tem uma segunda vítima além do
+feixe: as próprias arestas do monólito, desenhadas por cima da hachura da sua
+face (ver acima). Uma aresta é traço, não corpo — `opaque=false`, de
+propósito, para continuar vazia entre a tinta quando não há nada atrás dela.
+Mas quando ela cai bem em cima da hachura da própria face, à mesma
+profundidade, vencer o empate apagava o `opaque` que a hachura tinha deixado:
+o vão do glifo `:` da aresta virava janela para o céu bem no meio de uma
+parede que deveria ser sólida — o mesmo defeito do feixe, só que entre duas
+superfícies do mesmo objeto em vez de entre luz e superfície. A correção é
+`opaque` **pegajoso**: só herda de quem já estava lá quando as duas
+profundidades coincidem (mesma superfície, dentro da tolerância do z-buffer)
+— uma superfície genuinamente mais perto, a uma distância diferente de
+verdade, não herda nada e decide sozinha com o próprio `opaque`. Isso resolve
+a aresta de graça, mas não o disco do orbe ou a carcaça do holofote: os dois
+são corpo, não hachura em cima de outra coisa, então não têm de quem herdar —
+precisam declarar `opaque=true` eles mesmos, senão a franja do próprio
+degradê (onde o glifo escolhido para aquele brilho tem pouca tinta) vira o
+mesmo buraco.
+
+**Uma área preenchida nunca paga a busca por forma.** O interior de uma face
+não tem silhueta para preservar — ali o traço é meio e não fim —, então ela
+busca só por cobertura: o glifo do pool inteiro da textura cuja cobertura
+*medida* no atlas está mais perto do nível-alvo, nunca o nível mais baixo,
+porque o espaço deixaria um buraco no meio de um corpo sólido. O chão
+preenchido é o caso oposto e usa o nível vazio de propósito: é assim que uma
+poça de luz tem borda em vez de retângulo. A busca por forma (a mesma que a
+aresta usa, ver abaixo) fica reservada para quem gera poucos fragmentos por
+quadro — hachura de face sozinha já soma milhares.
+
+**O nível de uma rampa é medido, não suposto.** O índice de um fragmento
+preenchido é uma busca binária pelo glifo, dentro do pool da textura ordenado
+por cobertura, cuja cobertura real no atlas (mesma medição de seis amostras
+do casamento de forma, reduzida a uma média) está mais perto do nível-alvo —
+a posição de cada caractere na rampa não é palpite nenhum, e o pool em si
+não é mais uma string de meia dúzia de caracteres digitada à mão: é medido a
+partir da CP437 inteira (ver "A rampa de glifos é escolha, não conclusão").
 
 **As camadas do céu são luz do sol, e passaram a saber disso.** O roxo em volta
 do horizonte, o rosa atrás do disco e o ciano rente à linha eram três constantes:
@@ -239,10 +293,17 @@ os orbes. A luz nem entra na lista do quadro — uma direcional de intensidade z
 custaria o mesmo teste por fragmento para não fazer nada, e ainda apareceria na
 contagem do HUD como se estivesse iluminando.
 
-**Traçado analítico, sem malha e sem BVH.** Tudo o que a engine desenha é linha
-— até uma face sólida, que é linha repetida —, e um raio não acerta linha: cada
-objeto declara a esfera ou a caixa que o representa. Com o custo por teste constante e uma dúzia de corpos, uma estrutura
-de aceleração custaria mais para manter do que economiza.
+**Traçado analítico, sem malha e sem grid ou BVH.** Tudo o que a engine desenha
+é linha — até uma face sólida, que é linha repetida —, e um raio não acerta
+linha: cada objeto declara a esfera ou a caixa que o representa. Com o custo
+por teste constante e algumas dezenas de corpos, uma estrutura de aceleração
+espacial custaria mais para manter do que economiza — mas "custo constante"
+não quer dizer "custo igual": uma caixa (duas transformações de matriz e três
+slabs) é bem mais cara de testar que uma esfera (só produtos escalares), e
+toda caixa cabe inteira numa esfera do mesmo centro. Por isso o raio testa
+primeiro essa esfera envolvente, e só paga o teste de caixa se ela for
+atingida — nunca dá falso negativo, e descarta de graça a parede de uma sala
+que o raio nem chega perto.
 
 **A resolução é o que torna isto viável.** São 180 colunas, não 1920 — o
 orçamento por fragmento é cem vezes o de um shader de pixel. A cena de
@@ -268,27 +329,37 @@ precisa saber do orbe que ainda não foi desenhado, e do monólito atrás da câ
 que projeta sombra na frente dela. Por isso `contribute` é uma fase separada de
 `render`.
 
-**A rampa de glifos é escolha, não conclusão.** A rampa clássica de dez níveis
-é a mais expressiva e a que dá mais sensação de superfície iluminada, mas sob luz
-forte uma linha da grade deixa de ser `/` e vira `#`: a leitura de wireframe
-cede. O modo `por família` preserva a silhueta com quatro níveis, e `desligada` é
-a referência. Os três custam vinte linhas porque o sombreamento devolve a
-luminância de qualquer jeito.
+**A rampa de glifos é escolha, não conclusão — mas é um peso, não um switch.**
+Quanto a luz pode vencer a forma na escolha do glifo de aresta é
+`rampWeight`, um número contínuo (`config.ts`), não três algoritmos
+separados: zero é geometria pura — a leitura de wireframe de sempre, a
+referência para comparar — e subindo, os fragmentos mais iluminados de uma
+aresta ganham glifos mais pesados sem que a direção da linha pare de opinar.
+Era um `enum` de três modos (`classic`/`family`/`off`) até essa distinção se
+revelar o próprio bug: no modo padrão, a forma da aresta era calculada
+certo e descartada por completo por uma indexação linear cega, e é por isso
+que toda aresta de um monólito lia como o mesmo `:` não importa a luz. Um
+peso contínuo sobre a mesma busca (ver abaixo) elimina essa bifurcação: não
+existe mais um modo em que a forma é jogada fora, só um em que ela pesa
+menos.
 
-**O glifo de uma aresta vem de casamento de forma, não de um balde de
-quatro.** Inspirado em alexharri.com/blog/ascii-rendering: cada glifo
-candidato tem um vetor de seis amostras, medido lendo o próprio canvas do
-atlas (`glyph-shape.ts`, `render/gl/atlas.ts`) — o mesmo bitmap que a GPU usa
-para desenhar, à mão ou da fonte do sistema, tanto faz. A reta que o
-rasterizador está desenhando tem uma forma local (direção mais onde exatamente
-ela cruza a célula, `offsetCol`/`offsetRow`) que o vizinho mais próximo entre
-os seis compara contra os candidatos — o que abre a porta que a classificação
-de quatro baldes (`VERTICAL/HORIZONTAL/UP/DOWN`) nunca abriu: duas arestas de
-uma caixa que se cruzam na mesma célula agora podem virar um canto de moldura
-de verdade (`┌┐└┘├┤┬┴┼`, ver "O nome"), não só uma das quatro direções fixas.
-O `_`/`-` de sempre — perto assenta no chão, longe pesa menos — continua sendo
-decisão de distância, não de forma: ela só filtra qual dos dois entra no
-conjunto de candidatos antes da busca.
+**O glifo de uma aresta vem de casamento de forma *e* de luz, não de um
+balde de quatro nem de uma indexação cega.** Inspirado em
+alexharri.com/blog/ascii-rendering: cada glifo candidato tem um vetor de
+seis amostras, medido lendo o próprio canvas do atlas (`glyph-shape.ts`,
+`render/gl/atlas.ts`) — o mesmo bitmap que a GPU usa para desenhar, à mão ou
+da fonte do sistema, tanto faz. A reta que o rasterizador está desenhando
+tem uma forma local (direção mais onde exatamente ela cruza a célula,
+`offsetCol`/`offsetRow`) que o vizinho mais próximo compara contra os
+candidatos, **junto com** a cobertura-alvo que a luz pede — as duas coisas
+na mesma busca, ponderadas por `rampWeight` (`nearestWeightedGlyph`,
+`glyph-shape.ts`). É o que abre a porta que a classificação de quatro
+baldes (`VERTICAL/HORIZONTAL/UP/DOWN`) nunca abriu: duas arestas de uma
+caixa que se cruzam na mesma célula podem virar um canto de moldura de
+verdade (`┌┐└┘├┤┬┴┼`, ver "O nome"), e sob luz forte podem pesar mais sem
+perder a direção. O `_`/`-` de sempre — perto assenta no chão, longe pesa
+menos — continua sendo decisão de distância, não de forma: ela só filtra
+qual dos dois entra no conjunto de candidatos antes da busca.
 
 **O contraste direcional atravessa a borda da célula sem imagem nenhuma.** O
 artigo usa doze amostras fora da célula para saber se uma forma continua na
@@ -299,19 +370,29 @@ qualquer ponto da tela, dentro ou fora da célula atual — então as doze
 amostras externas custam avaliação, não pixel de vizinho nenhum
 (`sampleLineCoverage`/`enhanceContrast`, `glyph-shape.ts`). É o que evita o
 vizinho-mais-próximo pular de glifo por um triz entre duas células da mesma
-aresta. O que **não** foi portado do artigo é a k-d tree: os conjuntos de
-candidatos aqui são dezenas de glifos curados, não a CP437 inteira, e busca
-por força bruta já sai em frações de microssegundo.
+aresta. O que **não** foi portado do artigo é a k-d tree, mas por um motivo
+diferente do original: o pool de candidatos hoje é a CP437 quase inteira
+(~256 glifos, medidos uma vez só a partir de `palette.ts`), não dezenas — e é
+exatamente por isso que a busca por fragmento não varre o pool inteiro. Ela
+é uma janela de umas dezenas de candidatos em torno do ponto onde o mínimo
+combinado (forma + cobertura-alvo) deveria estar, achado por busca binária
+num array já ordenado por cobertura — o suficiente para o custo por
+fragmento não se importar com o pool ter crescido.
 
-**Textura é o alfabeto de onde o glifo sai.** Uma engine
-que rasteriza para caracteres tem um canal que nenhuma outra tem — a forma do
-glifo — e a rampa já usava metade dele para carregar luz. A outra metade é
-superfície: `lisa` é o gradiente contínuo de sempre, `áspera` são os blocos
-`░▒▓█` da CP437, cujo degrau grosso entre dois níveis é exatamente o que o olho
-lê como aspereza, e `irregular` é a mesma ideia com o nível deslocado por ruído.
-O modo da rampa continua sendo preferência de quem olha; a textura é do objeto, e
-é por isso que ela mora na entidade e não em `settings` — dois monólitos lado a
-lado, sob a mesma luz e a mesma rampa, podem ser de materiais diferentes.
+**Textura é o alfabeto de onde o glifo sai, e agora é medido, não
+digitado.** Uma engine que rasteriza para caracteres tem um canal que
+nenhuma outra tem — a forma do glifo — e a rampa já usava metade dele para
+carregar luz. A outra metade é superfície: `lisa` é o pool inteiro da CP437
+sem filtro, o gradiente mais fino possível e o que mais expõe letras e
+símbolos fora dos blocos de sempre; `áspera` é o subconjunto medido desse
+mesmo pool cujas seis amostras concordam entre si — preenchimento uniforme
+dentro da célula, variância baixa — espaçado por um degrau mínimo de
+cobertura, o que reproduz o degrau grosso que o olho lê como aspereza sem
+depender de uma lista de blocos hand-typed; `irregular` é o mesmo pool
+áspero com o nível deslocado por ruído. O peso da rampa continua sendo
+preferência de quem olha; a textura é do objeto, e é por isso que ela mora
+na entidade e não em `settings` — dois monólitos lado a lado, sob a mesma
+luz e o mesmo peso, podem ser de materiais diferentes.
 
 **O ruído da textura irregular é ancorado no mundo, não na tela.** Sorteado por
 célula de tela ele nadaria sobre a superfície a cada passo da câmera, que é o
