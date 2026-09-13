@@ -17,8 +17,9 @@ import {
 import {
   type MenuItem,
   adjustItem,
-  clampToRange,
+  choiceArrowDirection,
   isFocusable,
+  sliderRatioValue,
 } from "./menu/model";
 import { buildEntityItems } from "./menu/schema";
 
@@ -122,6 +123,17 @@ export class Editor {
     }
 
     const layout = this.layout;
+
+    // Um slider agarrado continua respondendo à coluna do cursor sozinha,
+    // não importa a linha — mesma correção do menu de pausa, mesmo widget.
+    if (this.draggingSlider >= 0 && events.down && layout !== null) {
+      const item = this.items[this.draggingSlider];
+      if (item !== undefined && item.kind === "slider") {
+        item.set(sliderRatioValue(item, this.exactCol, layout.trackCol, layout.trackWidth));
+      }
+      return;
+    }
+
     const insidePanel =
       layout !== null &&
       this.col >= layout.col &&
@@ -174,28 +186,26 @@ export class Editor {
     const onTrack = item.kind === "slider" && this.col >= layout.trackCol - 1;
 
     if (events.pressed) {
-      if (onTrack) {
+      const choiceDir = choiceArrowDirection(
+        item,
+        this.col,
+        layout.trackCol,
+        layout.trackWidth,
+      );
+
+      if (choiceDir !== 0) {
+        adjustItem(item, choiceDir);
+      } else if (onTrack) {
         this.draggingSlider = index;
+        // Clicar num ponto da trilha significa "vá para cá", sem exigir
+        // arrasto: é a mesma regra do menu, e vale porque é o mesmo widget.
+        // A continuação do arrasto é tratada em `update`, coluna a coluna.
+        item.set(
+          sliderRatioValue(item, this.exactCol, layout.trackCol, layout.trackWidth),
+        );
       } else if (item.kind !== "slider") {
         this.activate(item);
       }
-    }
-
-    // Clicar num ponto da trilha significa "vá para cá", sem exigir arrasto:
-    // é a mesma regra do menu, e vale porque é o mesmo widget.
-    if (
-      item.kind === "slider" &&
-      onTrack &&
-      (events.pressed || this.draggingSlider === index)
-    ) {
-      const ratio =
-        (this.exactCol - layout.trackCol) / Math.max(1, layout.trackWidth - 1);
-      item.set(
-        clampToRange(
-          item.min + clamp(ratio, 0, 1) * (item.max - item.min),
-          item,
-        ),
-      );
     }
   }
 
@@ -256,7 +266,7 @@ export class Editor {
     const selected = this.world.selected;
     if (selected === null) return;
 
-    if (events.wheel !== 0 && !this.manipulator.resizing) {
+    if (events.wheel !== 0 && !this.manipulator.manipulating) {
       this.manipulator.rotate(selected, events.wheel);
       return;
     }
@@ -275,12 +285,16 @@ export class Editor {
     );
   }
 
-  draw(framebuffer: Framebuffer, viewport: Viewport): void {
+  draw(
+    framebuffer: Framebuffer,
+    viewport: Viewport,
+    rasterizer: Rasterizer,
+  ): void {
     if (!this.active) return;
 
     // Setas primeiro, painel por cima: um objeto encostado na lateral não
     // pode furar o painel com as próprias alças.
-    this.manipulator.draw(framebuffer, this.col, this.row);
+    this.manipulator.draw(framebuffer, rasterizer, this.col, this.row);
 
     if (this.layout !== null) {
       drawPanel(

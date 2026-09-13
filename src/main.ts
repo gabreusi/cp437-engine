@@ -248,8 +248,8 @@ const render = (time: number): void => {
   // resposta do outro conforme a ordem em que rodam.
   world.editing = menu.editing || editor.active;
 
-  editor.draw(framebuffer, currentViewport);
-  menu.draw(framebuffer);
+  editor.draw(framebuffer, currentViewport, rasterizer);
+  menu.draw(framebuffer, rasterizer);
   // O retículo é o último a ser escrito: ele aponta para o menu e para o
   // painel, então não pode ser coberto por nenhum dos dois.
   if (menu.open || editor.active) cursor.draw(framebuffer);

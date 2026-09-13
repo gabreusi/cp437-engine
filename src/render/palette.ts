@@ -42,6 +42,7 @@ export const GLYPH = {
 
   ARROW_RIGHT: 16,
   ARROW_LEFT: 17,
+  ARROW_VERTICAL: 18,
   ARROW_UP: 30,
   ARROW_DOWN: 31,
 

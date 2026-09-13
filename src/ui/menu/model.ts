@@ -124,3 +124,45 @@ export const clampToRange = (value: number, item: SliderItem): number => {
 
 export const formatValue = (item: SliderItem): string =>
   `${item.get().toFixed(item.digits ?? 0)}${item.suffix ?? ""}`;
+
+/**
+ * Qual seta de um campo "choice" está sob a coluna: `-1` (esquerda), `1`
+ * (direita) ou `0` (nem uma nem outra — ou o item não é "choice").
+ *
+ * As setas ficam fora da trilha (`trackCol-1` e `trackCol+trackWidth`, ver
+ * `draw.ts`) e nunca tiveram teste de clique próprio — só o teclado ciclava
+ * `options`. Mora aqui, e não dentro do menu ou do editor, pelo mesmo motivo
+ * de `sliderRatioValue`: o widget é o mesmo nos dois lugares.
+ */
+export const choiceArrowDirection = (
+  item: MenuItem,
+  col: number,
+  trackCol: number,
+  trackWidth: number,
+): -1 | 0 | 1 => {
+  if (item.kind !== "choice") return 0;
+  if (col <= trackCol - 1) return -1;
+  if (col >= trackCol + trackWidth) return 1;
+  return 0;
+};
+
+/**
+ * O valor de um slider sob uma coluna de tela, dado onde a trilha começa e
+ * quanto ela mede.
+ *
+ * Só depende da coluna: quem arrasta lateralmente não pode perder o valor
+ * por ter a linha do cursor variado um pixel, e mora aqui porque o menu de
+ * pausa e o painel do editor têm o mesmo widget e não podem divergir.
+ */
+export const sliderRatioValue = (
+  item: SliderItem,
+  exactCol: number,
+  trackCol: number,
+  trackWidth: number,
+): number => {
+  const ratio = (exactCol - trackCol) / Math.max(1, trackWidth - 1);
+  return clampToRange(
+    item.min + Math.max(0, Math.min(1, ratio)) * (item.max - item.min),
+    item,
+  );
+};
