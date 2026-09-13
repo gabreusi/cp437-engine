@@ -59,6 +59,13 @@ const beamStyle: SurfaceStyle = (sample, out) => {
   // por cima (ver `Fragment.fuse`) em vez de trocar o glifo e abrir buraco
   // nela. Onde não houver nada ainda, desenha o ponto normalmente.
   out.fuse = true;
+  // Resolvida, não adiada: sem isto herdaria `isDeferred=true` de uma parede
+  // ou linha de chão desenhada antes no mesmo quadro (o fragmento é
+  // reaproveitado entre todos os estilos) e o feixe seria sombreado com o
+  // material de outro objeto na posição errada, em vez de tingir com a
+  // própria cor — exatamente o "caractere sem cor, pisca aleatório" que essa
+  // omissão produz.
+  out.isDeferred = false;
   return sample.depth > 0;
 };
 

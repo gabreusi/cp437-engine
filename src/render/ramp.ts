@@ -1,5 +1,5 @@
 import { hashNoise } from "../math/noise";
-import type { GlyphAtlas } from "./gl/atlas";
+import type { GlyphAtlasCanvas } from "./atlas-canvas";
 import {
   buildShapeEntries,
   enhanceContrast,
@@ -231,7 +231,7 @@ let discShape: GlyphShapeEntry[] = [];
  * Chamado só quando o atlas é (re)construído (`gl/presenter.ts`) — resize,
  * troca de DPI, `webglcontextlost`. Nunca no laço por fragmento.
  */
-export const updateGlyphShapeTable = (atlas: GlyphAtlas): void => {
+export const updateGlyphShapeTable = (atlas: GlyphAtlasCanvas): void => {
   canonicalGlyphs = sortByCoverage(buildShapeEntries(atlas, ALL_GLYPHS));
 
   const visible = canonicalGlyphs.filter(
@@ -420,7 +420,7 @@ export const areaLutRow = (
  * quantizado de 0 a 1. `ShadingPass` amostra por `texelFetch`, já com o
  * jitter de `irregular` aplicado ao nível antes de indexar — ver `jitterAt`.
  */
-export const buildAreaGlyphLut = (): Uint8Array => {
+export const buildAreaGlyphLut = (): Uint8Array<ArrayBuffer> => {
   const lut = new Uint8Array(AREA_LUT_ROWS * AREA_LUT_LEVELS);
   for (const texture of TEXTURES) {
     const pool = fillPools[texture];
@@ -449,7 +449,7 @@ const EDGE_POOL_STRIDE = SAMPLE_COUNT + 2;
  * porta `nearestWeightedGlyph` (busca binária + janela) sobre este mesmo
  * array, em vez de rodar a busca na CPU por fragmento.
  */
-export const buildEdgeShapePool = (near: boolean): Float32Array => {
+export const buildEdgeShapePool = (near: boolean): Float32Array<ArrayBuffer> => {
   const entries = edgeCandidates(near);
   const data = new Float32Array(entries.length * EDGE_POOL_STRIDE);
   for (let i = 0; i < entries.length; i += 1) {

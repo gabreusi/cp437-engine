@@ -69,6 +69,15 @@ export interface Presenter {
     lights: LightWorld,
     camera: Camera,
   ): void;
+  /**
+   * O atlas já foi construído ao menos uma vez — `updateGlyphShapeTable`
+   * já rodou, e `render/ramp.ts::discCandidates`/`edgeCandidates` têm o que
+   * responder. No backend WebGL2 isso é verdade assim que o construtor
+   * termina (tudo síncrono); no WebGPU, `requestAdapter`/`requestDevice`
+   * são assíncronos, e a cena não pode começar a desenhar (orb, sol,
+   * qualquer disco) antes disso — ver o guard em `main.ts`.
+   */
+  isAtlasReady(): boolean;
   dispose(): void;
 }
 
@@ -170,6 +179,11 @@ export class GlPresenter implements Presenter {
       resources.atlasCellWidth = cellWidth;
     }
     resources.grid.setAtlas(resources.atlas);
+  }
+
+  /** Tudo síncrono neste backend: o atlas já existe assim que `resize` roda uma vez. */
+  isAtlasReady(): boolean {
+    return this.resources?.atlas !== null && this.resources?.atlas !== undefined;
   }
 
   /**

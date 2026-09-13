@@ -298,6 +298,9 @@ export class Manipulator {
     // reaproveitado e passaria a tingir o que está atrás em vez de riscar
     // por cima.
     out.fuse = false;
+    // Resolvida, não adiada — mesmo motivo do contorno de seleção em
+    // `World["selectionStyle"]`.
+    out.isDeferred = false;
     return sample.depth > 0;
   };
 

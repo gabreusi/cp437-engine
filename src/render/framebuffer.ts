@@ -35,6 +35,15 @@ import type { Rgb } from "../math/color";
  *            um extra por cima de outra coisa.
  *            R,G,B = cor acumulada; A = emissivo acumulado (/EMISSIVE_RANGE)
  *
+ *            Pertence à superfície que a recebeu, não à célula: quando uma
+ *            profundidade genuinamente diferente vence a célula depois (uma
+ *            parede mais perto, o menu com `OVERLAY_DEPTH`), o acumulado é da
+ *            superfície antiga e não pode vazar para a nova — `plot`/
+ *            `plotDeferred` zeram `fuse` sempre que a vitória não é
+ *            coincidente com a profundidade anterior. Sem isso um feixe de
+ *            holofote que passasse por uma célula antes do menu ser desenhado
+ *            por cima continuaria acendendo o fundo do menu.
+ *
  * O G-buffer (posição, normal, material, forma) mora em arrays `Float32Array`
  * separados, um por campo, no leiaute que `render/gl/passes/shading.ts` sobe
  * como textura `RGBA32F` — ver `GBUFFER_FIELDS` abaixo. Só tem conteúdo onde
@@ -153,19 +162,19 @@ const packFlags = (surface: DeferredSurface): number =>
   (surface.reflections ? 64 : 0);
 
 export class Framebuffer {
-  readonly cells: Uint8Array;
-  readonly colors: Uint8Array;
-  readonly fuse: Uint8Array;
+  readonly cells: Uint8Array<ArrayBuffer>;
+  readonly colors: Uint8Array<ArrayBuffer>;
+  readonly fuse: Uint8Array<ArrayBuffer>;
   private readonly depth: Float32Array;
 
   // G-buffer: um Float32Array por textura RGBA32F que `ShadingPass` sobe.
   // Só têm valor definido onde `cells.a === 0` (célula adiada).
-  readonly gPos: Float32Array;
-  readonly gNormal: Float32Array;
-  readonly gAlbedo: Float32Array;
-  readonly gEmissive: Float32Array;
-  readonly gShape: Float32Array;
-  readonly gGloss: Float32Array;
+  readonly gPos: Float32Array<ArrayBuffer>;
+  readonly gNormal: Float32Array<ArrayBuffer>;
+  readonly gAlbedo: Float32Array<ArrayBuffer>;
+  readonly gEmissive: Float32Array<ArrayBuffer>;
+  readonly gShape: Float32Array<ArrayBuffer>;
+  readonly gGloss: Float32Array<ArrayBuffer>;
 
   constructor(
     readonly colCount: number,
@@ -203,7 +212,21 @@ export class Framebuffer {
   /** Profundidade atual da célula, para quem precisa decidir fora de `plot` (nenhum caso hoje, mas evita duplicar o array). */
   private wins(index: number, depth: number): boolean {
     const current = this.depth[index]!;
+    // `Math.abs(current) * DEPTH_TOLERANCE` vira `NaN` quando `current` é
+    // infinito (`Infinity` da célula nunca tocada, `-Infinity` de
+    // `OVERLAY_DEPTH`), e qualquer comparação com `NaN` é falsa — o que
+    // destravaria a célula de menu/HUD para a próxima geometria que passasse
+    // por ela, quebrando exatamente a garantia que `OVERLAY_DEPTH` promete.
+    if (!Number.isFinite(current)) return depth <= current;
     return !(depth > current + Math.abs(current) * DEPTH_TOLERANCE);
+  }
+
+  /** Ver o comentário de `fuse` no topo do arquivo: pertence à superfície antiga, não à célula. */
+  private clearFuse(offset: number): void {
+    this.fuse[offset] = 0;
+    this.fuse[offset + 1] = 0;
+    this.fuse[offset + 2] = 0;
+    this.fuse[offset + 3] = 0;
   }
 
   /**
@@ -252,6 +275,7 @@ export class Framebuffer {
       hadContent &&
       Math.abs(depth - current) <= Math.abs(current) * DEPTH_TOLERANCE;
     const staysOpaque = coincident && this.colors[offset + 3] !== 0;
+    if (!coincident) this.clearFuse(offset);
 
     this.depth[index] = depth;
 
@@ -296,6 +320,7 @@ export class Framebuffer {
       hadContent &&
       Math.abs(depth - current) <= Math.abs(current) * DEPTH_TOLERANCE;
     const staysOpaque = coincident && this.colors[offset + 3] !== 0;
+    if (!coincident) this.clearFuse(offset);
 
     this.depth[index] = depth;
 

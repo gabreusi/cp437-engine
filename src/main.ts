@@ -12,8 +12,8 @@ import { Camera } from "./render/camera";
 import { drawDebugPattern } from "./render/debug-pattern";
 import { countByColor, dumpGlyphs } from "./render/debug-dump";
 import { Framebuffer } from "./render/framebuffer";
-import { ensureFontLoaded } from "./render/gl/atlas";
-import { GlPresenter } from "./render/gl/presenter";
+import { ensureFontLoaded } from "./render/atlas-canvas";
+import { GpuPresenter } from "./render/gpu/presenter";
 import { createProjected, Rasterizer } from "./render/rasterizer";
 import {
   computeViewport,
@@ -33,7 +33,7 @@ import { buildGroups } from "./ui/menu/schema";
 import { Ground } from "./scene/ground";
 
 const canvas = requireElement<HTMLCanvasElement>("canvas");
-const presenter = new GlPresenter(canvas);
+const presenter = new GpuPresenter(canvas);
 
 // O primeiro atlas quase sempre desenha antes da BIOS terminar de carregar
 // (ver `ensureFontLoaded`); assim que ela chega, o atlas é refeito com a
@@ -201,6 +201,12 @@ const render = (time: number): void => {
   const currentViewport = syncViewport();
   if (framebuffer === null) return;
 
+  // Criação de dispositivo é assíncrona no backend WebGPU
+  // (`requestAdapter`/`requestDevice`): sem isto, os primeiros quadros
+  // desenhariam disco/aresta antes de `updateGlyphShapeTable` ter rodado, e
+  // `glyphForDiscEdge`/`glyphForLineEdge` explodiriam com o pool vazio.
+  if (!presenter.isAtlasReady()) return;
+
   framebuffer.clear();
   rasterizer.begin(camera, currentViewport, framebuffer);
 
@@ -282,12 +288,12 @@ if (import.meta.env.DEV) {
       freecam,
       rasterizer,
       getFramebuffer: () => framebuffer,
-      dumpGlyphs: () => {
-        const planes = presenter.readShadedPlanes();
+      dumpGlyphs: async () => {
+        const planes = await presenter.readShadedPlanes();
         return planes === null ? "" : dumpGlyphs(planes);
       },
-      countByColor: () => {
-        const planes = presenter.readShadedPlanes();
+      countByColor: async () => {
+        const planes = await presenter.readShadedPlanes();
         return planes === null ? {} : countByColor(planes);
       },
       // Cobre a cena com o charset inteiro: confere atlas e data textures.
