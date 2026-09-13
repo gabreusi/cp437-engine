@@ -2,7 +2,11 @@ import * as mat4 from "../math/mat4";
 import { type Rgb, rgb } from "../math/color";
 import { lerp, set, type Vec3, vec3 } from "../math/vec3";
 import type { Camera } from "./camera";
-import type { Framebuffer } from "./framebuffer";
+import {
+  createDeferredSurface,
+  type DeferredSurface,
+  type Framebuffer,
+} from "./framebuffer";
 import { CELL_ASPECT, type Viewport } from "./viewport";
 
 export interface Fragment {
@@ -39,6 +43,15 @@ export interface Fragment {
    * composite. `false` continua sendo o comportamento de sempre: substitui.
    */
   fuse: boolean;
+  /**
+   * A superfície ainda não tem cor: precisa do kernel de luz da GPU
+   * (`ShadingPass`). `true` desvia o fragmento para `Framebuffer.plotDeferred`
+   * — `glyph`/`color`/`emissive` acima ficam sem sentido, o que importa é
+   * `deferred`. Ver `SurfacePen.style` (`shading.ts`), o único produtor.
+   */
+  isDeferred: boolean;
+  /** Reaproveitado; só tem conteúdo válido quando `isDeferred` é `true`. */
+  readonly deferred: DeferredSurface;
 }
 
 /**
@@ -112,6 +125,8 @@ export class Rasterizer {
     emissive: 0,
     opaque: false,
     fuse: false,
+    isDeferred: false,
+    deferred: createDeferredSurface(),
   };
   private readonly sample: SurfaceSample = {
     x: 0,
@@ -332,17 +347,28 @@ export class Rasterizer {
 
       if (!style(sample, this.fragment)) continue;
 
-      this.framebuffer.plot(
-        plotCol,
-        plotRow,
-        this.fragment.glyph,
-        this.fragment.color,
-        depth,
-        this.fragment.alpha,
-        this.fragment.emissive,
-        this.fragment.opaque,
-        this.fragment.fuse,
-      );
+      if (this.fragment.isDeferred) {
+        this.framebuffer.plotDeferred(
+          plotCol,
+          plotRow,
+          depth,
+          this.fragment.alpha,
+          this.fragment.opaque,
+          this.fragment.deferred,
+        );
+      } else {
+        this.framebuffer.plot(
+          plotCol,
+          plotRow,
+          this.fragment.glyph,
+          this.fragment.color,
+          depth,
+          this.fragment.alpha,
+          this.fragment.emissive,
+          this.fragment.opaque,
+          this.fragment.fuse,
+        );
+      }
     }
   }
 
@@ -502,6 +528,22 @@ export class Rasterizer {
       opaque,
       fuse,
     );
+  }
+
+  /**
+   * Escreve uma célula adiada por coordenada direta — o preenchimento do
+   * chão usa este caminho, do mesmo jeito que usa `plotCell` para a versão
+   * resolvida: a varredura é em espaço de tela, não pelo DDA de `line`.
+   */
+  plotCellDeferred(
+    col: number,
+    row: number,
+    depth: number,
+    alpha: number,
+    opaque: boolean,
+    surface: DeferredSurface,
+  ): void {
+    this.framebuffer.plotDeferred(col, row, depth, alpha, opaque, surface);
   }
 
   /** Escreve uma célula já projetada. Estrelas e o sol usam este caminho. */

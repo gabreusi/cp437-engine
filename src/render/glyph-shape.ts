@@ -1,4 +1,4 @@
-import type { GlyphAtlas } from "./gl/atlas";
+import type { GlyphAtlasCanvas } from "./atlas-canvas";
 import { CELL_ASPECT } from "./viewport";
 
 /**
@@ -134,7 +134,7 @@ const averageAlpha = (
  * glifos à mão inclusos. Só roda quando o atlas é (re)construído.
  */
 export const buildShapeEntries = (
-  atlas: GlyphAtlas,
+  atlas: GlyphAtlasCanvas,
   glyphs: readonly number[],
 ): GlyphShapeEntry[] => {
   const ctx = atlas.canvas.getContext("2d");

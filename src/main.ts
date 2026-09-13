@@ -5,15 +5,15 @@ import { requireElement } from "./dom";
 import { FreeCam } from "./core/freecam";
 import { GameLoop } from "./core/loop";
 import { createUiEvents, Input, type UiEvents } from "./core/input";
-import type { ShadeOptions } from "./light/shade";
+import { SHADOW_THRESHOLD, type ShadeOptions } from "./light/shade";
 import { LightWorld } from "./light/world";
 import { setRgb } from "./math/color";
 import { Camera } from "./render/camera";
 import { drawDebugPattern } from "./render/debug-pattern";
 import { countByColor, dumpGlyphs } from "./render/debug-dump";
 import { Framebuffer } from "./render/framebuffer";
-import { ensureFontLoaded } from "./render/gl/atlas";
-import { GlPresenter } from "./render/gl/presenter";
+import { ensureFontLoaded } from "./render/atlas-canvas";
+import { GpuPresenter } from "./render/gpu/presenter";
 import { createProjected, Rasterizer } from "./render/rasterizer";
 import {
   computeViewport,
@@ -33,7 +33,7 @@ import { buildGroups } from "./ui/menu/schema";
 import { Ground } from "./scene/ground";
 
 const canvas = requireElement<HTMLCanvasElement>("canvas");
-const presenter = new GlPresenter(canvas);
+const presenter = new GpuPresenter(canvas);
 
 // O primeiro atlas quase sempre desenha antes da BIOS terminar de carregar
 // (ver `ensureFontLoaded`); assim que ela chega, o atlas é refeito com a
@@ -70,7 +70,7 @@ const shadeOptions: ShadeOptions = {
   shadows: true,
   reflections: true,
   // Contribuição abaixo disto não muda glifo nem cor, e não paga um raio.
-  shadowThreshold: 0.004,
+  shadowThreshold: SHADOW_THRESHOLD,
   maxShadowLights: 3,
   ambient: true,
 };
@@ -201,6 +201,12 @@ const render = (time: number): void => {
   const currentViewport = syncViewport();
   if (framebuffer === null) return;
 
+  // Criação de dispositivo é assíncrona no backend WebGPU
+  // (`requestAdapter`/`requestDevice`): sem isto, os primeiros quadros
+  // desenhariam disco/aresta antes de `updateGlyphShapeTable` ter rodado, e
+  // `glyphForDiscEdge`/`glyphForLineEdge` explodiriam com o pool vazio.
+  if (!presenter.isAtlasReady()) return;
+
   framebuffer.clear();
   rasterizer.begin(camera, currentViewport, framebuffer);
 
@@ -257,7 +263,7 @@ const render = (time: number): void => {
   debugOverlay?.(framebuffer);
 
   updateAtmosphere(currentViewport);
-  presenter.present(framebuffer, atmosphere);
+  presenter.present(framebuffer, atmosphere, lights, camera);
   hud.update(camera, time, input.isLocked, stats);
 };
 
@@ -282,9 +288,14 @@ if (import.meta.env.DEV) {
       freecam,
       rasterizer,
       getFramebuffer: () => framebuffer,
-      dumpGlyphs: () => (framebuffer === null ? "" : dumpGlyphs(framebuffer)),
-      countByColor: () =>
-        framebuffer === null ? {} : countByColor(framebuffer),
+      dumpGlyphs: async () => {
+        const planes = await presenter.readShadedPlanes();
+        return planes === null ? "" : dumpGlyphs(planes);
+      },
+      countByColor: async () => {
+        const planes = await presenter.readShadedPlanes();
+        return planes === null ? {} : countByColor(planes);
+      },
       // Cobre a cena com o charset inteiro: confere atlas e data textures.
       // Chamar de novo desliga.
       showCharset: () => {
@@ -308,7 +319,7 @@ if (import.meta.env.DEV) {
         render(performance.now());
       },
       capture: (scale: number) =>
-        presenter.capture(framebuffer!, atmosphere, scale),
+        presenter.capture(framebuffer!, atmosphere, lights, camera, scale),
     },
   });
 }

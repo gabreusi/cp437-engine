@@ -1,5 +1,5 @@
 import { hashNoise } from "../math/noise";
-import type { GlyphAtlas } from "./gl/atlas";
+import type { GlyphAtlasCanvas } from "./atlas-canvas";
 import {
   buildShapeEntries,
   enhanceContrast,
@@ -71,6 +71,16 @@ export const TEXTURES: readonly SurfaceTexture[] = [
   TEXTURE.ROUGH,
   TEXTURE.IRREGULAR,
 ];
+
+/**
+ * Índice numérico de `SurfaceTexture`, para caber num canal do G-buffer
+ * (`Framebuffer.plotDeferred`) e servir de linha na LUT de `ShadingPass`.
+ */
+export const TEXTURE_ID: Record<SurfaceTexture, number> = {
+  [TEXTURE.SMOOTH]: 0,
+  [TEXTURE.ROUGH]: 1,
+  [TEXTURE.IRREGULAR]: 2,
+};
 
 /**
  * Quanto o nível de um fragmento se desloca por ruído, em unidades de
@@ -221,7 +231,7 @@ let discShape: GlyphShapeEntry[] = [];
  * Chamado só quando o atlas é (re)construído (`gl/presenter.ts`) — resize,
  * troca de DPI, `webglcontextlost`. Nunca no laço por fragmento.
  */
-export const updateGlyphShapeTable = (atlas: GlyphAtlas): void => {
+export const updateGlyphShapeTable = (atlas: GlyphAtlasCanvas): void => {
   canonicalGlyphs = sortByCoverage(buildShapeEntries(atlas, ALL_GLYPHS));
 
   const visible = canonicalGlyphs.filter(
@@ -375,4 +385,79 @@ export const glyphForDiscEdge = (
     weight,
     EDGE_SHAPE_WINDOW,
   );
+};
+
+// ---------------------------------------------------------------------------
+// Bake para a GPU — mesma tabela de sempre, empacotada para `ShadingPass`
+// (`render/gl/passes/shading.ts`) amostrar em vez de buscar.
+//
+// Roda só quando `updateGlyphShapeTable` roda (atlas novo), nunca por quadro:
+// é exatamente por isso que dá para portar `nearestByCoverage` para uma LUT
+// e `nearestWeightedGlyph` para um pool pequeno em vez do algoritmo inteiro.
+// ---------------------------------------------------------------------------
+
+/** Níveis de luminância comprimida amostrados na LUT de preenchimento. */
+export const AREA_LUT_LEVELS = 256;
+/**
+ * Uma linha por textura, em dois pisos de cobertura: `RAW` é o que o
+ * preenchimento do chão usa (pode chegar a `GLYPH.SPACE`, célula vazia);
+ * `FLOORED` é o que toda face hachurada usa (`MIN_FILL_COVERAGE`, nunca
+ * vazio — ver o comentário de `glyphForPatch`). As duas existem porque as
+ * duas chamadas de `glyphForPatch` de hoje discordam desse piso.
+ */
+export const AREA_LUT_VARIANTS = 2;
+export const AREA_LUT_ROWS = TEXTURES.length * AREA_LUT_VARIANTS;
+
+/** Linha da LUT de preenchimento para uma textura e um piso de cobertura. */
+export const areaLutRow = (
+  texture: SurfaceTexture,
+  floored: boolean,
+): number => TEXTURE_ID[texture] * AREA_LUT_VARIANTS + (floored ? 1 : 0);
+
+/**
+ * `AREA_LUT_ROWS × AREA_LUT_LEVELS` glifos (um byte cada): para cada textura
+ * e piso, o glifo que `nearestByCoverage` devolveria em cada nível
+ * quantizado de 0 a 1. `ShadingPass` amostra por `texelFetch`, já com o
+ * jitter de `irregular` aplicado ao nível antes de indexar — ver `jitterAt`.
+ */
+export const buildAreaGlyphLut = (): Uint8Array<ArrayBuffer> => {
+  const lut = new Uint8Array(AREA_LUT_ROWS * AREA_LUT_LEVELS);
+  for (const texture of TEXTURES) {
+    const pool = fillPools[texture];
+    for (let variant = 0; variant < AREA_LUT_VARIANTS; variant += 1) {
+      const minCoverage = variant === 0 ? 0 : MIN_FILL_COVERAGE;
+      const row = TEXTURE_ID[texture] * AREA_LUT_VARIANTS + variant;
+      for (let level = 0; level < AREA_LUT_LEVELS; level += 1) {
+        const target = level / (AREA_LUT_LEVELS - 1);
+        lut[row * AREA_LUT_LEVELS + level] = nearestByCoverage(
+          pool,
+          target,
+          minCoverage,
+        );
+      }
+    }
+  }
+  return lut;
+};
+
+/** Campos de `GlyphShapeEntry` achatados: 6 de forma, 1 de cobertura, 1 de glifo. */
+const EDGE_POOL_STRIDE = SAMPLE_COUNT + 2;
+
+/**
+ * O pool de candidatos de aresta (`edgeCandidates`), achatado para uma
+ * textura `RGBA32F` de `entries.length` colunas × 2 fileiras: `ShadingPass`
+ * porta `nearestWeightedGlyph` (busca binária + janela) sobre este mesmo
+ * array, em vez de rodar a busca na CPU por fragmento.
+ */
+export const buildEdgeShapePool = (near: boolean): Float32Array<ArrayBuffer> => {
+  const entries = edgeCandidates(near);
+  const data = new Float32Array(entries.length * EDGE_POOL_STRIDE);
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i]!;
+    const base = i * EDGE_POOL_STRIDE;
+    for (let k = 0; k < SAMPLE_COUNT; k += 1) data[base + k] = entry.vector[k]!;
+    data[base + SAMPLE_COUNT] = entry.coverage;
+    data[base + SAMPLE_COUNT + 1] = entry.glyph;
+  }
+  return data;
 };

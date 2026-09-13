@@ -97,6 +97,11 @@ export class World implements Renderable {
     // caixa de seleção passaria a tingir o que está atrás em vez de riscar
     // por cima, do jeito que sempre desenhou.
     out.fuse = false;
+    // Resolvida, não adiada: sem isto herdaria `isDeferred=true` de uma
+    // parede ou linha de chão desenhada antes no mesmo quadro (o fragmento é
+    // reaproveitado) e a seleção seria sombreada com o material de outro
+    // objeto em vez de desenhar a própria cor.
+    out.isDeferred = false;
     return sample.depth > 0;
   };
 

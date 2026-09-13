@@ -1,4 +1,4 @@
-import { EMISSIVE_RANGE, type Framebuffer } from "../../framebuffer";
+import { EMISSIVE_RANGE } from "../../framebuffer";
 import type { GlyphAtlas } from "../atlas";
 import { Program } from "../program";
 
@@ -75,31 +75,11 @@ void main() {
     fragColor = vec4(finalRgb, finalAlpha);
 }`;
 
-const createDataTexture = (
-  gl: WebGL2RenderingContext,
-  width: number,
-  height: number,
-): WebGLTexture => {
-  const texture = gl.createTexture();
-  if (texture === null)
-    throw new Error("Não foi possível criar a textura de dados.");
-
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, width, height);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  return texture;
-};
-
 export class GridPass {
   private readonly program: Program;
 
-  private data: WebGLTexture | null = null;
-  private color: WebGLTexture | null = null;
-  private dataWidth = 0;
-  private dataHeight = 0;
+  private colCount = 0;
+  private rowCount = 0;
 
   private atlas: GlyphAtlas | null = null;
 
@@ -116,67 +96,32 @@ export class GridPass {
     this.atlas = atlas;
   }
 
-  /** As data textures têm o tamanho exato do grid, então seguem o viewport. */
+  /** Só guarda a dimensão para o uniform — as texturas são do `ShadingPass`. */
   resize(colCount: number, rowCount: number): void {
-    if (
-      this.dataWidth === colCount &&
-      this.dataHeight === rowCount &&
-      this.data !== null &&
-      this.color !== null
-    ) {
-      return;
-    }
-    if (this.data !== null) this.gl.deleteTexture(this.data);
-    if (this.color !== null) this.gl.deleteTexture(this.color);
-
-    this.data = createDataTexture(this.gl, colCount, rowCount);
-    this.color = createDataTexture(this.gl, colCount, rowCount);
-    this.dataWidth = colCount;
-    this.dataHeight = rowCount;
+    this.colCount = colCount;
+    this.rowCount = rowCount;
   }
 
-  draw(framebuffer: Framebuffer): void {
-    const { gl, atlas, data, color } = this;
-    if (atlas === null || data === null || color === null) return;
+  /**
+   * `data`/`color` são a saída do `ShadingPass` — o mesmo leiaute que a CPU
+   * subia direto até este passo existir (`EMISSIVE_RANGE` incluso), então o
+   * shader acima não mudou uma linha.
+   */
+  draw(data: WebGLTexture, color: WebGLTexture): void {
+    const { gl, atlas } = this;
+    if (atlas === null) return;
 
-    // A única transferência CPU→GPU do quadro: dois planos, ~172 KB.
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, data);
-    gl.texSubImage2D(
-      gl.TEXTURE_2D,
-      0,
-      0,
-      0,
-      this.dataWidth,
-      this.dataHeight,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      framebuffer.cells,
-    );
 
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, color);
-    gl.texSubImage2D(
-      gl.TEXTURE_2D,
-      0,
-      0,
-      0,
-      this.dataWidth,
-      this.dataHeight,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      framebuffer.colors,
-    );
 
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, atlas.texture);
 
     this.program.use();
-    gl.uniform2f(
-      this.program.uniform("uGridSize"),
-      this.dataWidth,
-      this.dataHeight,
-    );
+    gl.uniform2f(this.program.uniform("uGridSize"), this.colCount, this.rowCount);
     gl.uniform2f(this.program.uniform("uAtlasGrid"), atlas.cols, atlas.rows);
     gl.uniform1f(this.program.uniform("uEmissiveRange"), EMISSIVE_RANGE);
 
@@ -185,9 +130,5 @@ export class GridPass {
 
   dispose(): void {
     this.program.dispose();
-    if (this.data !== null) this.gl.deleteTexture(this.data);
-    if (this.color !== null) this.gl.deleteTexture(this.color);
-    this.data = null;
-    this.color = null;
   }
 }
