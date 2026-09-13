@@ -5,7 +5,7 @@ import { requireElement } from "./dom";
 import { FreeCam } from "./core/freecam";
 import { GameLoop } from "./core/loop";
 import { createUiEvents, Input, type UiEvents } from "./core/input";
-import type { ShadeOptions } from "./light/shade";
+import { SHADOW_THRESHOLD, type ShadeOptions } from "./light/shade";
 import { LightWorld } from "./light/world";
 import { setRgb } from "./math/color";
 import { Camera } from "./render/camera";
@@ -70,7 +70,7 @@ const shadeOptions: ShadeOptions = {
   shadows: true,
   reflections: true,
   // Contribuição abaixo disto não muda glifo nem cor, e não paga um raio.
-  shadowThreshold: 0.004,
+  shadowThreshold: SHADOW_THRESHOLD,
   maxShadowLights: 3,
   ambient: true,
 };
@@ -257,7 +257,7 @@ const render = (time: number): void => {
   debugOverlay?.(framebuffer);
 
   updateAtmosphere(currentViewport);
-  presenter.present(framebuffer, atmosphere);
+  presenter.present(framebuffer, atmosphere, lights, camera);
   hud.update(camera, time, input.isLocked, stats);
 };
 
@@ -282,9 +282,14 @@ if (import.meta.env.DEV) {
       freecam,
       rasterizer,
       getFramebuffer: () => framebuffer,
-      dumpGlyphs: () => (framebuffer === null ? "" : dumpGlyphs(framebuffer)),
-      countByColor: () =>
-        framebuffer === null ? {} : countByColor(framebuffer),
+      dumpGlyphs: () => {
+        const planes = presenter.readShadedPlanes();
+        return planes === null ? "" : dumpGlyphs(planes);
+      },
+      countByColor: () => {
+        const planes = presenter.readShadedPlanes();
+        return planes === null ? {} : countByColor(planes);
+      },
       // Cobre a cena com o charset inteiro: confere atlas e data textures.
       // Chamar de novo desliga.
       showCharset: () => {
@@ -308,7 +313,7 @@ if (import.meta.env.DEV) {
         render(performance.now());
       },
       capture: (scale: number) =>
-        presenter.capture(framebuffer!, atmosphere, scale),
+        presenter.capture(framebuffer!, atmosphere, lights, camera, scale),
     },
   });
 }

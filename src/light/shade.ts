@@ -142,6 +142,14 @@ const lightFalloff = (
 const reflected: Rgb = rgb();
 
 /**
+ * Contribuição abaixo da qual não vale disparar raio de sombra — o mesmo
+ * valor em todo lugar que monta um `ShadeOptions` (aqui, `main.ts`,
+ * `render/shading.ts`, e o uniform equivalente em `render/gl/passes/shading.ts`),
+ * para as quatro cópias nunca discordarem.
+ */
+export const SHADOW_THRESHOLD = 0.004;
+
+/**
  * Opções da chamada aninhada de `reflectGround`: sem sombra (custaria um
  * raio extra por reflexo), sem reflexo (trava a recursão em um bounce só,
  * igual ao resto do espelho) e com ambiente ligado — diferente do
@@ -152,7 +160,7 @@ const reflected: Rgb = rgb();
 const GROUND_REFLECT_OPTIONS: ShadeOptions = {
   shadows: false,
   reflections: false,
-  shadowThreshold: 0.004,
+  shadowThreshold: SHADOW_THRESHOLD,
   maxShadowLights: 0,
   ambient: true,
 };

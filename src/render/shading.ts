@@ -1,18 +1,11 @@
 import { settings } from "../config";
-import { type Rgb, copyRgb, rgb, setRgb } from "../math/color";
-import { NO_OWNER, type ShadeOptions, shadeSurface } from "../light/shade";
+import { type Rgb, copyRgb, rgb } from "../math/color";
+import { NO_OWNER, SHADOW_THRESHOLD, type ShadeOptions } from "../light/shade";
 import type { Material } from "../light/types";
 import { LightWorld } from "../light/world";
 import type { RenderContext } from "../scene/scene";
 import { COLOR, GLYPH } from "./palette";
-import {
-  MIN_FILL_COVERAGE,
-  TEXTURE,
-  type SurfaceTexture,
-  glyphForLineEdge,
-  glyphForLineShape,
-  glyphForPatch,
-} from "./ramp";
+import { TEXTURE, TEXTURE_ID, type SurfaceTexture, glyphForLineShape } from "./ramp";
 import type { Fragment, SurfaceSample, SurfaceStyle } from "./rasterizer";
 
 /** Onde as linhas horizontais deixam de ser `_` rente ao chão e viram `-`. */
@@ -114,7 +107,7 @@ export const createLitContext = (): LitContext => ({
   options: {
     shadows: true,
     reflections: true,
-    shadowThreshold: 0.004,
+    shadowThreshold: SHADOW_THRESHOLD,
     maxShadowLights: 3,
     ambient: true,
   },
@@ -143,31 +136,17 @@ export const beginLit = (lit: LitContext, context: RenderContext): void => {
   lit.rampWeight = settings.lightingEnabled ? settings.rampWeight : 0;
 };
 
-const shaded: Rgb = rgb();
-
 /**
- * Escreve uma cor HDR num fragmento, separando o que passa de 1.
+ * Preenche o G-buffer de um fragmento iluminado — a ponte entre `light/`, que
+ * não sabe o que é um glifo, e `ShadingPass` (GLSL), que é quem agora roda
+ * `shadeSurface` e a escolha de glifo, em paralelo, uma vez que o quadro
+ * inteiro já projetou.
  *
- * A célula guarda oito bits por canal, mas o sombreamento produz valores acima
- * de 1 — é justamente esse excesso que vira halo no bloom. A cor normalizada
- * pelo pico guarda o matiz, e o pico vai para o canal emissivo; o shader
- * remultiplica e recupera o valor original sem perder a cor. Cortar em 1 em vez
- * disso deixaria todo núcleo brilhante branco e sem estouro.
+ * Sem luz (`!lit.lit`), não há o que adiar: cor e glifo saem daqui mesmo,
+ * exatamente como antes de existir `ShadingPass` — é a referência com que
+ * qualquer efeito de luz é comparado.
  */
-export const writeHdrColor = (out: Fragment, color: Rgb): void => {
-  const peak = Math.max(1, color.r, color.g, color.b);
-  const inverse = 1 / peak;
-  setRgb(out.color, color.r * inverse, color.g * inverse, color.b * inverse);
-  out.emissive = peak - 1;
-};
-
-/**
- * Ilumina um fragmento e escolhe o caractere que o representa.
- *
- * A ponte entre `light/`, que não sabe o que é um glifo, e o rasterizador, que
- * não sabe o que é uma luz.
- */
-export const shadeFragment = (
+const fillDeferredFragment = (
   lit: LitContext,
   material: Material,
   sample: SurfaceSample,
@@ -176,77 +155,49 @@ export const shadeFragment = (
   normalZ: number,
   ownerId: number,
   texture: SurfaceTexture,
-  /**
-   * A linha está preenchendo uma área, e não desenhando uma aresta.
-   *
-   * Muda a busca: uma aresta tem silhueta a preservar, e o interior de uma
-   * face não tem. Ali o traço é meio e não fim, e a cobertura medida do pool
-   * inteiro da textura é o que descreve superfície.
-   */
   area: boolean,
   out: Fragment,
 ): void => {
   if (!lit.lit) {
+    out.isDeferred = false;
     copyRgb(out.color, material.albedo);
     out.emissive = material.emissiveStrength;
     out.glyph = geometricGlyph(sample);
     return;
   }
 
-  // Do fragmento para a câmera. O sombreamento quer esta direção, e não a do
-  // olhar: é ela que entra no meio-vetor e no espelhamento.
-  let viewX = lit.cameraX - sample.x;
-  let viewY = lit.cameraY - sample.y;
-  let viewZ = lit.cameraZ - sample.z;
-  const distance = Math.sqrt(viewX * viewX + viewY * viewY + viewZ * viewZ);
-  if (distance > 0) {
-    viewX /= distance;
-    viewY /= distance;
-    viewZ /= distance;
-  }
-
-  const luminance = shadeSurface(
-    lit.world,
-    material,
-    sample.x,
-    sample.y,
-    sample.z,
-    normalX,
-    normalY,
-    normalZ,
-    viewX,
-    viewY,
-    viewZ,
-    ownerId,
-    lit.options,
-    shaded,
-  );
-
-  writeHdrColor(out, shaded);
-  out.glyph = area
-    ? glyphForPatch(
-        luminance,
-        lit.rampExposure,
-        texture,
-        sample.x,
-        sample.y,
-        sample.z,
-        MIN_FILL_COVERAGE,
-      )
-    : glyphForLineEdge(
-        luminance,
-        sample.offsetCol,
-        sample.offsetRow,
-        sample.dirCol,
-        sample.dirRow,
-        sample.depth < settings.viewDistance * UNDERSCORE_RANGE,
-        lit.rampWeight,
-        lit.rampExposure,
-        texture,
-        sample.x,
-        sample.y,
-        sample.z,
-      );
+  out.isDeferred = true;
+  const d = out.deferred;
+  d.worldX = sample.x;
+  d.worldY = sample.y;
+  d.worldZ = sample.z;
+  d.normalX = normalX;
+  d.normalY = normalY;
+  d.normalZ = normalZ;
+  d.ownerId = ownerId;
+  d.albedoR = material.albedo.r;
+  d.albedoG = material.albedo.g;
+  d.albedoB = material.albedo.b;
+  d.emissiveR = material.emissive.r;
+  d.emissiveG = material.emissive.g;
+  d.emissiveB = material.emissive.b;
+  d.emissiveStrength = material.emissiveStrength;
+  d.reflectivity = material.reflectivity;
+  d.gloss = material.gloss;
+  d.mirror = material.mirror;
+  d.textureId = TEXTURE_ID[texture];
+  d.area = area;
+  d.ambient = lit.options.ambient;
+  d.reflections = lit.options.reflections;
+  // Aresta: `variant` é o "perto" que decide `_` contra `-`. Área: sempre o
+  // piso "floored" (nunca vazio) — só `Ground.fillLitFloor` pede o cru.
+  d.variant = area
+    ? false
+    : sample.depth < settings.viewDistance * UNDERSCORE_RANGE;
+  d.offsetCol = sample.offsetCol;
+  d.offsetRow = sample.offsetRow;
+  d.dirCol = sample.dirCol;
+  d.dirRow = sample.dirRow;
 };
 
 /**
@@ -321,7 +272,7 @@ export class SurfacePen {
 
     this.beforeShade?.(sample, this.material);
 
-    shadeFragment(
+    fillDeferredFragment(
       this.lit,
       this.material,
       sample,
@@ -346,12 +297,13 @@ export class SurfacePen {
     // estivesse atrás dela em vez de bloquear.
     out.fuse = false;
 
-    // O nível mais baixo da cobertura é o espaço: a célula não some, ela
-    // fica vazia (é o que o chão usa; a hachura de face nunca chega lá,
-    // protegida por `MIN_FILL_COVERAGE`). Descartar aqui poupa a escrita e o
-    // teste de profundidade de algo que o shader descartaria por cobertura
-    // zero.
-    return out.glyph !== GLYPH.SPACE && out.glyph !== GLYPH.BLANK;
+    // O piso mais baixo da hachura de face é `MIN_FILL_COVERAGE`, nunca o
+    // espaço — `ShadingPass` usa a linha "floored" da LUT de preenchimento
+    // para todo fragmento adiado (ver `areaLutRow`), então não há mais o que
+    // descartar aqui: quem ainda pode chegar ao espaço é só o chão
+    // (`Ground.fillLitFloor`), que decide isso sozinho, sem passar por `style`.
+    if (!out.isDeferred) return out.glyph !== GLYPH.SPACE && out.glyph !== GLYPH.BLANK;
+    return true;
   };
 }
 

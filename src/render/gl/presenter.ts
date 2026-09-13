@@ -1,6 +1,16 @@
 import { settings } from "../../config";
-import type { Framebuffer } from "../framebuffer";
-import { updateGlyphShapeTable } from "../ramp";
+import { SHADOW_THRESHOLD } from "../../light/shade";
+import type { LightWorld } from "../../light/world";
+import type { Camera } from "../camera";
+import type { ShadedPlanes } from "../debug-dump";
+import { EMISSIVE_RANGE, type Framebuffer } from "../framebuffer";
+import {
+  AREA_LUT_LEVELS,
+  AREA_LUT_ROWS,
+  buildAreaGlyphLut,
+  buildEdgeShapePool,
+  updateGlyphShapeTable,
+} from "../ramp";
 import type { Viewport } from "../viewport";
 import { type GlyphAtlas, atlasCellWidthFor, buildGlyphAtlas } from "./atlas";
 import { GlContext } from "./context";
@@ -8,19 +18,40 @@ import { type Atmosphere, BackgroundPass } from "./passes/background";
 import { BloomPass } from "./passes/bloom";
 import { CompositePass } from "./passes/composite";
 import { GridPass } from "./passes/grid";
+import { ShadingPass } from "./passes/shading";
 import { RenderTarget } from "./target";
 
 export type { Atmosphere };
 
-/** Substitui o atlas por um novo, liberando o anterior. */
+/**
+ * Substitui o atlas por um novo, liberando o anterior, e refaz tudo que
+ * depende da forma medida dos glifos: os pools de `ramp.ts` (para o pool de
+ * candidatos de disco que orbe/sol ainda usam na CPU) e as LUTs que
+ * `ShadingPass` sobe para a GPU — a mesma hora de sempre, resize/DPI/perda de
+ * contexto, nunca por quadro.
+ */
 const rebuildGlyphAtlas = (
   gl: WebGL2RenderingContext,
   cellWidth: number,
   previous: GlyphAtlas | null,
+  shading: ShadingPass,
 ): GlyphAtlas => {
   if (previous !== null) gl.deleteTexture(previous.texture);
   const atlas = buildGlyphAtlas(gl, cellWidth);
   updateGlyphShapeTable(atlas);
+
+  const edgeNear = buildEdgeShapePool(true);
+  const edgeFar = buildEdgeShapePool(false);
+  shading.setGlyphLuts(
+    buildAreaGlyphLut(),
+    AREA_LUT_ROWS,
+    AREA_LUT_LEVELS,
+    edgeNear,
+    edgeNear.length / 8,
+    edgeFar,
+    edgeFar.length / 8,
+  );
+
   return atlas;
 };
 
@@ -32,7 +63,12 @@ const rebuildGlyphAtlas = (
  */
 export interface Presenter {
   resize(viewport: Viewport): void;
-  present(framebuffer: Framebuffer, atmosphere: Atmosphere): void;
+  present(
+    framebuffer: Framebuffer,
+    atmosphere: Atmosphere,
+    lights: LightWorld,
+    camera: Camera,
+  ): void;
   dispose(): void;
 }
 
@@ -67,6 +103,7 @@ const readTargetToCanvas = (
 const SCANLINE_PERIOD_CSS = 5;
 
 interface Resources {
+  shading: ShadingPass;
   grid: GridPass;
   background: BackgroundPass;
   bloom: BloomPass;
@@ -96,6 +133,7 @@ export class GlPresenter implements Presenter {
 
     const { hdr } = this.context;
     this.resources = {
+      shading: new ShadingPass(gl),
       grid: new GridPass(gl),
       background: new BackgroundPass(gl),
       bloom: new BloomPass(gl, width, height, hdr),
@@ -116,13 +154,19 @@ export class GlPresenter implements Presenter {
     const { gl } = this.context;
     this.context.resize(viewport);
 
+    resources.shading.resize(viewport.colCount, viewport.rowCount);
     resources.grid.resize(viewport.colCount, viewport.rowCount);
     resources.scene.resize(viewport.pixelWidth, viewport.pixelHeight);
     resources.bloom.resize(viewport.pixelWidth, viewport.pixelHeight);
 
     const cellWidth = atlasCellWidthFor(viewport.cellWidth * viewport.dpr);
     if (resources.atlas === null || cellWidth !== resources.atlasCellWidth) {
-      resources.atlas = rebuildGlyphAtlas(gl, cellWidth, resources.atlas);
+      resources.atlas = rebuildGlyphAtlas(
+        gl,
+        cellWidth,
+        resources.atlas,
+        resources.shading,
+      );
       resources.atlasCellWidth = cellWidth;
     }
     resources.grid.setAtlas(resources.atlas);
@@ -144,17 +188,62 @@ export class GlPresenter implements Presenter {
 
     const { gl } = this.context;
     const cellWidth = atlasCellWidthFor(viewport.cellWidth * viewport.dpr);
-    resources.atlas = rebuildGlyphAtlas(gl, cellWidth, resources.atlas);
+    resources.atlas = rebuildGlyphAtlas(
+      gl,
+      cellWidth,
+      resources.atlas,
+      resources.shading,
+    );
     resources.atlasCellWidth = cellWidth;
     resources.grid.setAtlas(resources.atlas);
   }
 
-  present(framebuffer: Framebuffer, atmosphere: Atmosphere): void {
+  /**
+   * Roda o kernel de luz da GPU sobre o quadro que a CPU acabou de montar —
+   * antes de `GridPass`, que só sabe ler as duas data textures resultantes.
+   * Chamado de `present` e `capture`: o grid não muda com a escala da
+   * captura, então rodar de novo ali seria trabalho igual jogado fora, mas
+   * separar em método evita as duas cópias divergirem.
+   */
+  private runShading(
+    framebuffer: Framebuffer,
+    lights: LightWorld,
+    camera: Camera,
+  ): void {
+    const resources = this.resources;
+    if (resources === null) return;
+
+    resources.shading.draw(
+      framebuffer,
+      lights,
+      camera.position.x,
+      camera.position.y,
+      camera.position.z,
+      {
+        shadowsEnabled: settings.shadowsEnabled,
+        shadowThreshold: SHADOW_THRESHOLD,
+        maxShadowLights: Math.round(settings.maxShadowLights),
+        groundFillLight: settings.groundFillLight,
+        rampWeight: settings.lightingEnabled ? settings.rampWeight : 0,
+        rampExposure: settings.rampExposure,
+        emissiveRange: EMISSIVE_RANGE,
+      },
+    );
+  }
+
+  present(
+    framebuffer: Framebuffer,
+    atmosphere: Atmosphere,
+    lights: LightWorld,
+    camera: Camera,
+  ): void {
     const resources = this.resources;
     const viewport = this.viewport;
     if (this.context.isLost || resources === null || viewport === null) return;
 
     const { gl } = this.context;
+
+    this.runShading(framebuffer, lights, camera);
 
     // 1. Céu e grid, fora da tela, para o bloom ter o que amostrar.
     resources.scene.bind();
@@ -168,7 +257,11 @@ export class GlPresenter implements Presenter {
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    resources.grid.draw(framebuffer);
+    const shadingCells = resources.shading.cellsTexture;
+    const shadingColors = resources.shading.colorsTexture;
+    if (shadingCells !== null && shadingColors !== null) {
+      resources.grid.draw(shadingCells, shadingColors);
+    }
 
     // 2. Bloom em duas escalas.
     resources.bloom.render(resources.scene.texture, settings.bloomRadius);
@@ -200,6 +293,8 @@ export class GlPresenter implements Presenter {
   capture(
     framebuffer: Framebuffer,
     atmosphere: Atmosphere,
+    lights: LightWorld,
+    camera: Camera,
     scale: number,
   ): HTMLCanvasElement {
     const resources = this.resources;
@@ -212,6 +307,8 @@ export class GlPresenter implements Presenter {
     const width = Math.round(viewport.pixelWidth * scale);
     const height = Math.round(viewport.pixelHeight * scale);
 
+    this.runShading(framebuffer, lights, camera);
+
     resources.scene.resize(width, height);
     resources.bloom.resize(width, height);
     const target = new RenderTarget(gl, width, height);
@@ -223,7 +320,11 @@ export class GlPresenter implements Presenter {
 
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-      resources.grid.draw(framebuffer);
+      const shadingCells = resources.shading.cellsTexture;
+      const shadingColors = resources.shading.colorsTexture;
+      if (shadingCells !== null && shadingColors !== null) {
+        resources.grid.draw(shadingCells, shadingColors);
+      }
 
       // Raio e período acompanham a escala, senão o CRT muda de aparência
       // justamente na imagem que vai virar wallpaper.
@@ -254,10 +355,22 @@ export class GlPresenter implements Presenter {
     }
   }
 
+  /** Ver `ShadingPass.readPlanes` — só para `window.engine.dumpGlyphs`/`countByColor`. */
+  readShadedPlanes(): ShadedPlanes | null {
+    const resources = this.resources;
+    const viewport = this.viewport;
+    if (resources === null || viewport === null) return null;
+
+    const planes = resources.shading.readPlanes();
+    if (planes === null) return null;
+    return { colCount: viewport.colCount, rowCount: viewport.rowCount, ...planes };
+  }
+
   dispose(): void {
     const resources = this.resources;
     if (resources === null) return;
 
+    resources.shading.dispose();
     resources.grid.dispose();
     resources.background.dispose();
     resources.bloom.dispose();

@@ -1,11 +1,11 @@
 import { settings } from "../config";
-import { copyRgb, type Rgb, rgb } from "../math/color";
+import { copyRgb } from "../math/color";
 import { type Vec3, vec3 } from "../math/vec3";
-import { NO_OWNER, type ShadeOptions, shadeSurface } from "../light/shade";
-import { COLOR, GLYPH } from "../render/palette";
-import { glyphForPatch } from "../render/ramp";
-import type { Fragment } from "../render/rasterizer";
-import { createGroundPen, createMaterial, fogAmount, groundBand, writeHdrColor } from "../render/shading";
+import { NO_OWNER } from "../light/shade";
+import { COLOR } from "../render/palette";
+import { TEXTURE_ID } from "../render/ramp";
+import { createDeferredSurface } from "../render/framebuffer";
+import { createGroundPen, createMaterial, fogAmount, groundBand } from "../render/shading";
 import type { Renderable, RenderContext } from "./scene";
 
 /**
@@ -25,15 +25,6 @@ export class Ground implements Renderable {
   private readonly pen = createGroundPen();
 
   /**
-   * O material do chão entre as linhas.
-   *
-   * Separado do da linha por um campo só, e é o campo que importa: aqui
-   * `emissiveStrength` é zero. A linha é neon e brilha sozinha; o vão entre
-   * duas linhas é superfície, e só aparece se alguma luz bater nele.
-   */
-  private readonly fillMaterial = createMaterial();
-
-  /**
    * Material dedicado ao que um espelho vê do chão — separado de
    * `fillMaterial` de propósito: aquele é reescrito célula a célula dentro
    * do próprio `fillLitFloor()`, e ler esse ponteiro de outro objeto
@@ -43,52 +34,8 @@ export class Ground implements Renderable {
    */
   private readonly reflectionMaterial = createMaterial();
 
-  /**
-   * Duas opções de sombreamento para a mesma conta.
-   *
-   * `probe` é a passada barata que decide se a célula vale um sombreamento de
-   * verdade: é o mesmo kernel sem os raios de sombra, que é a parte cara. Só
-   * as células que passam do limiar pagam a segunda passada, com sombra. Não é
-   * uma aproximação escrita à parte — é a mesma função, com uma opção a
-   * menos, e por isso não pode discordar da versão completa.
-   *
-   * Nas duas, `ambient` é falso: o preenchimento existe para mostrar onde bate
-   * luz *direta*, e a luz ambiente chega em todo lugar por definição — somada,
-   * ela levaria todas as células acima do limiar e o vazio entre as linhas,
-   * que é metade do estilo, sumiria.
-   *
-   * `reflections` também é falso, e por um motivo parecido: o lóbulo do céu
-   * devolve uma lavagem quase uniforme em toda a superfície horizontal. O
-   * especular das luzes continua ligado — é ele que desenha a coluna do sol
-   * refletida no chão, que é a imagem que este preenchimento existe para
-   * conseguir.
-   */
-  private readonly probe: ShadeOptions = {
-    shadows: false,
-    reflections: false,
-    shadowThreshold: 0.004,
-    maxShadowLights: 0,
-    ambient: false,
-  };
-
-  private readonly lit: ShadeOptions = {
-    shadows: true,
-    reflections: false,
-    shadowThreshold: 0.004,
-    maxShadowLights: 3,
-    ambient: false,
-  };
-
   private readonly ray: Vec3 = vec3();
-  private readonly shaded: Rgb = rgb();
-  private readonly fragment: Fragment = {
-    glyph: 0,
-    color: rgb(),
-    alpha: 1,
-    emissive: 0,
-    opaque: false,
-    fuse: false,
-  };
+  private readonly surface = createDeferredSurface();
 
   /**
    * Publica o material que um espelho vê do chão, antes de qualquer
@@ -154,7 +101,7 @@ export class Ground implements Renderable {
    * do quadro.
    */
   private fillLitFloor(context: RenderContext): void {
-    const { camera, rasterizer, viewport, lights, shading } = context;
+    const { camera, rasterizer, viewport } = context;
     const { lit } = this.pen;
 
     // Sem iluminação, ou com o peso da rampa zerado, o glifo volta a ser só
@@ -163,22 +110,40 @@ export class Ground implements Renderable {
 
     // O plano do chão visto exatamente de perfil não tem área na tela.
     const height = camera.position.y;
-    // if (Math.abs(height) < 1e-3) return;
 
-    const threshold = settings.groundFillLight;
     const texture = settings.gridTexture;
     const reach = settings.viewDistance;
 
-    this.probe.shadowThreshold = shading.shadowThreshold;
-    this.lit.shadows = shading.shadows;
-    this.lit.shadowThreshold = shading.shadowThreshold;
-    this.lit.maxShadowLights = shading.maxShadowLights;
-
-    const material = this.fillMaterial;
-    material.emissiveStrength = 0;
-    material.reflectivity = settings.groundReflectivity;
-    material.gloss = settings.groundGloss;
-    material.mirror = true;
+    // O sombreamento (e o limiar `groundFillLight`) agora rodam no
+    // `ShadingPass`: aqui só a geometria decide quais células valem a pena
+    // varrer, e o G-buffer carrega o resto. Sem a passada barata de antes —
+    // ela existia para poupar o kernel de luz na CPU, e é exatamente esse
+    // custo que a GPU paraleliza.
+    const surface = this.surface;
+    surface.normalX = 0;
+    surface.normalY = 1;
+    surface.normalZ = 0;
+    surface.ownerId = NO_OWNER;
+    surface.emissiveR = 0;
+    surface.emissiveG = 0;
+    surface.emissiveB = 0;
+    surface.emissiveStrength = 0;
+    surface.reflectivity = settings.groundReflectivity;
+    surface.gloss = settings.groundGloss;
+    surface.mirror = true;
+    surface.textureId = TEXTURE_ID[texture];
+    surface.area = true;
+    // Piso "cru": o chão pode devolver espaço e sumir — ver `DeferredSurface.variant`.
+    surface.variant = true;
+    // O vazio entre linhas é metade do estilo: com ambiente somado, toda
+    // célula passaria do limiar e a leitura de grade sumiria — mesmo motivo
+    // de sempre, ver `ShadeOptions.ambient` em `light/shade.ts`.
+    surface.ambient = false;
+    // O lóbulo do céu devolve uma lavagem quase uniforme na superfície
+    // horizontal inteira: o especular das luzes (que já entra sozinho,
+    // fora deste interruptor) desenha a coluna do sol, e é só isso que o
+    // preenchimento quer mostrar — mesmo com reflexo ligado no ajuste global.
+    surface.reflections = false;
 
     // O chão fica de um lado só do horizonte, e qual lado depende de a
     // câmera estar acima ou abaixo do plano. Começar na fileira certa evita
@@ -217,73 +182,21 @@ export class Ground implements Renderable {
         const x = position.x + this.ray.x * distance;
         const z = position.z + this.ray.z * distance;
 
-        copyRgb(material.albedo, groundBand(depth));
+        const band = groundBand(depth);
+        surface.albedoR = band.r;
+        surface.albedoG = band.g;
+        surface.albedoB = band.b;
+        surface.worldX = x;
+        surface.worldY = 0;
+        surface.worldZ = z;
 
-        // A vista sai do fragmento para a câmera: é o raio ao contrário.
-        const viewX = -this.ray.x;
-        const viewY = -this.ray.y;
-        const viewZ = -this.ray.z;
-
-        let luminance = shadeSurface(
-          lights,
-          material,
-          x,
-          0,
-          z,
-          0,
-          1,
-          0,
-          viewX,
-          viewY,
-          viewZ,
-          NO_OWNER,
-          this.probe,
-          this.shaded,
-        );
-        if (luminance < threshold) continue;
-
-        // Passou no barato: agora vale o raio de sombra. Um corpo entre
-        // a luz e o chão tem que apagar a poça, não só as linhas dentro
-        // dela.
-        if (this.lit.shadows) {
-          luminance = shadeSurface(
-            lights,
-            material,
-            x,
-            0,
-            z,
-            0,
-            1,
-            0,
-            viewX,
-            viewY,
-            viewZ,
-            NO_OWNER,
-            this.lit,
-            this.shaded,
-          );
-          if (luminance < threshold) continue;
-        }
-
-        const glyph = glyphForPatch(
-          luminance,
-          lit.rampExposure,
-          texture,
-          x,
-          0,
-          z,
-        );
-        if (glyph === GLYPH.SPACE || glyph === GLYPH.BLANK) continue;
-
-        writeHdrColor(this.fragment, this.shaded);
-        rasterizer.plotCell(
+        rasterizer.plotCellDeferred(
           col,
           row,
-          glyph,
-          this.fragment.color,
           depth,
           (1 - fog) ** 1.2,
-          this.fragment.emissive,
+          false,
+          surface,
         );
       }
     }
