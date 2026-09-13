@@ -20,6 +20,7 @@ const createLight = (): Light => ({
   castsShadow: true,
   coneCos: -1,
   coneSoftness: 0.05,
+  apertureOwnerId: -1,
 });
 
 const createOccluder = (): Occluder => ({
@@ -114,6 +115,7 @@ export class LightWorld {
     light.castsShadow = true;
     light.coneCos = -1;
     light.coneSoftness = 0.05;
+    light.apertureOwnerId = -1;
     return light;
   }
 

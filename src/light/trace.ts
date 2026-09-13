@@ -1,5 +1,5 @@
 import * as mat4 from "../math/mat4";
-import { type Vec3, vec3 } from "../math/vec3";
+import { normalize, set, type Vec3, vec3 } from "../math/vec3";
 import { OCCLUDER, type Occluder } from "./types";
 import type { LightWorld } from "./world";
 
@@ -251,4 +251,71 @@ export const traceNearest = (
     }
   }
   return best;
+};
+
+export interface NearestHit {
+  occluder: Occluder;
+  distance: number;
+  hitX: number;
+  hitY: number;
+  hitZ: number;
+  /** Rascunho de módulo — reescrita a cada chamada, copie se for guardar. */
+  normal: Vec3;
+}
+
+const hitNormal: Vec3 = vec3();
+const localHit: Vec3 = vec3();
+
+/**
+ * Como `traceNearest`, mas também devolve distância, ponto e normal do
+ * acerto — o que o feixe do holofote precisa para calcular a direção
+ * refletida ao quicar num espelho (ver `scene/entities/spotlight.ts`).
+ */
+export const traceNearestHit = (
+  world: LightWorld,
+  ox: number,
+  oy: number,
+  oz: number,
+  dx: number,
+  dy: number,
+  dz: number,
+  maxDistance: number,
+  ignoreId: number,
+): NearestHit | null => {
+  const occluder = traceNearest(world, ox, oy, oz, dx, dy, dz, maxDistance, ignoreId);
+  if (occluder === null) return null;
+
+  const distance = rayOccluder(ox, oy, oz, dx, dy, dz, occluder);
+  const hitX = ox + dx * distance;
+  const hitY = oy + dy * distance;
+  const hitZ = oz + dz * distance;
+
+  if (occluder.kind === OCCLUDER.SPHERE) {
+    set(
+      hitNormal,
+      (hitX - occluder.center.x) / occluder.radius,
+      (hitY - occluder.center.y) / occluder.radius,
+      (hitZ - occluder.center.z) / occluder.radius,
+    );
+  } else {
+    mat4.transformPoint(localHit, occluder.toLocal, hitX, hitY, hitZ);
+    const { half } = occluder;
+    const ax = Math.abs(Math.abs(localHit.x) - half.x);
+    const ay = Math.abs(Math.abs(localHit.y) - half.y);
+    const az = Math.abs(Math.abs(localHit.z) - half.z);
+    let localX = 0;
+    let localY = 0;
+    let localZ = 0;
+    if (ax <= ay && ax <= az) {
+      localX = Math.sign(localHit.x);
+    } else if (ay <= az) {
+      localY = Math.sign(localHit.y);
+    } else {
+      localZ = Math.sign(localHit.z);
+    }
+    mat4.transformDirectionTransposed(hitNormal, occluder.toLocal, localX, localY, localZ);
+    normalize(hitNormal, hitNormal);
+  }
+
+  return { occluder, distance, hitX, hitY, hitZ, normal: hitNormal };
 };

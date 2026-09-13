@@ -1,4 +1,5 @@
 import { shadeOccluders, type ShadeOptions } from "../light/shade";
+import { addMirrorBounceLights } from "../light/mirror-bounce";
 import type { LightWorld } from "../light/world";
 import type { Camera } from "../render/camera";
 import type { Rasterizer } from "../render/rasterizer";
@@ -69,6 +70,10 @@ export class Scene {
     // E só agora toda luz e todo occluder do quadro estão completos — é a
     // hora de calcular o que um raio de espelho vê de cada corpo.
     shadeOccluders(context.lights);
+    // E só agora existe uma lista de luzes "de verdade" para espelhar — o
+    // espelho vira fonte secundária depois, nunca antes (ver
+    // `light/mirror-bounce.ts`).
+    addMirrorBounceLights(context.lights);
   }
 
   render(context: RenderContext): void {

@@ -1,6 +1,7 @@
 import { copyRgb, type Rgb, rgb, scaleRgb, setRgb } from "../../math/color";
-import { copy, cross, normalize, set, type Vec3, vec3 } from "../../math/vec3";
+import { copy, cross, normalize, reflect, set, type Vec3, vec3 } from "../../math/vec3";
 import { LIGHT, OCCLUDER } from "../../light/types";
+import { traceNearestHit } from "../../light/trace";
 import type { LightWorld } from "../../light/world";
 import { GLYPH } from "../../render/palette";
 import { createProjected, type SurfaceStyle } from "../../render/rasterizer";
@@ -45,6 +46,8 @@ const up: Vec3 = vec3();
 const beamEnd: Vec3 = vec3();
 const edgeEnd: Vec3 = vec3();
 const beamTint: Rgb = rgb();
+const bounceDirection: Vec3 = vec3();
+const bounceEnd: Vec3 = vec3();
 
 const beamStyle: SurfaceStyle = (sample, out) => {
   out.glyph = GLYPH.DOT;
@@ -160,7 +163,28 @@ export const spotlightKind: EntityKindDef = {
     cross(up, right, direction);
     normalize(up, up);
 
-    const length = Math.min(entity.range, MAX_BEAM_DRAW_LENGTH);
+    const fullLength = Math.min(entity.range, MAX_BEAM_DRAW_LENGTH);
+
+    // Quica num espelho? O feixe pára na superfície e continua na direção
+    // refletida com o resto do orçamento de comprimento, em vez de
+    // atravessar — um bounce só, sem recursão para um segundo espelho
+    // (mesma política do reflexo de corpo em `render/gpu/passes/shading.ts`).
+    const hit = traceNearestHit(
+      context.lights,
+      current.x,
+      current.y,
+      current.z,
+      direction.x,
+      direction.y,
+      direction.z,
+      fullLength,
+      entity.id,
+    );
+    const mirrorHit =
+      hit !== null && hit.occluder.material !== null && hit.occluder.material.mirror
+        ? hit
+        : null;
+    const length = mirrorHit !== null ? mirrorHit.distance : fullLength;
     const spread = length * Math.tan(entity.coneAngle / 2);
 
     scaleRgb(beamTint, entity.color, 0.85);
@@ -171,6 +195,28 @@ export const spotlightKind: EntityKindDef = {
       current.z + direction.z * length,
     );
     rasterizer.line(current.x, current.y, current.z, beamEnd.x, beamEnd.y, beamEnd.z, beamStyle);
+
+    if (mirrorHit !== null && mirrorHit.occluder.material !== null) {
+      const { material } = mirrorHit.occluder;
+      reflect(bounceDirection, direction, mirrorHit.normal);
+      const remaining = fullLength - mirrorHit.distance;
+      scaleRgb(beamTint, entity.color, 0.85 * material.reflectivity);
+      set(
+        bounceEnd,
+        mirrorHit.hitX + bounceDirection.x * remaining,
+        mirrorHit.hitY + bounceDirection.y * remaining,
+        mirrorHit.hitZ + bounceDirection.z * remaining,
+      );
+      rasterizer.line(
+        mirrorHit.hitX,
+        mirrorHit.hitY,
+        mirrorHit.hitZ,
+        bounceEnd.x,
+        bounceEnd.y,
+        bounceEnd.z,
+        beamStyle,
+      );
+    }
 
     scaleRgb(beamTint, entity.color, 0.55);
     const spokes: readonly [number, number][] = [
