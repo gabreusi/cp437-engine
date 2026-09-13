@@ -1,11 +1,22 @@
 import type { LightWorld } from "../light/world";
-import { type Vec3, set, sub, vec3 } from "../math/vec3";
+import { type Rgb, copyRgb, fromHex, rgb } from "../math/color";
+import {
+  type Vec3,
+  copy,
+  cross,
+  dot,
+  normalize,
+  set,
+  sub,
+  vec3,
+} from "../math/vec3";
 import type { Camera } from "../render/camera";
 import type { Framebuffer } from "../render/framebuffer";
 import { GLYPH } from "../render/palette";
 import {
   type Projected,
   type Rasterizer,
+  type SurfaceStyle,
   createProjected,
 } from "../render/rasterizer";
 import { OVERLAY_DEPTH } from "../render/text";
@@ -13,7 +24,6 @@ import { CELL_ASPECT } from "../render/viewport";
 import { BoxShape } from "../scene/entities/box";
 import type { EntityState } from "../scene/entities/entity";
 import { ENTITY_KINDS, type World } from "../scene/world";
-import { MENU_COLORS } from "./menu/draw";
 
 /**
  * Mexer nos objetos com o ponteiro: escolher, arrastar, girar e esticar.
@@ -53,9 +63,18 @@ const HANDLE_GAP = 0.95;
  */
 const PROBE = 1;
 
-/** Quanto o cursor pode estar longe da seta e ainda pegá-la. */
-const GRAB_COLS = 2;
-const GRAB_ROWS = 1;
+/**
+ * Comprimento da seta desenhada, em colunas equivalentes (fileira × `CELL_ASPECT`).
+ *
+ * Antes a seta era um glifo só, de uma célula — pequena demais para acertar
+ * com conforto, e a caixa de clique (bem maior que o glifo) é que sustentava
+ * a pontaria. Desenhando de fato uma haste até essa distância, a área
+ * clicável (`GRAB_RADIUS_COLS` abaixo) pode enfim coincidir com o que se vê.
+ */
+const ARROW_SHAFT_COLS = 3;
+
+/** Quanto o cursor pode estar longe do traço da seta e ainda pegá-la. */
+const GRAB_RADIUS_COLS = 0.85;
 
 /**
  * Cosseno máximo entre a face e o olhar para a seta dela existir.
@@ -68,12 +87,116 @@ const GRAB_ROWS = 1;
  */
 const MAX_FACING = 0.8;
 
-/** A seta de uma face: onde ela caiu na tela e o que ela estica. */
+/** Direção de "para cima" do mundo. Só leitura — nunca usar como `out`. */
+const WORLD_UP: Vec3 = vec3(0, 1, 0);
+
+/**
+ * Menor módulo aceito para o denominador de raio×plano, preservando o sinal.
+ *
+ * O limiar antigo (`1e-4`) só rejeitava o quadro quando já era tarde demais:
+ * bem antes de chegar lá, `distance` já tinha explodido para milhares de
+ * unidades. Grampear o denominador em vez de só testá-lo evita a divisão por
+ * quase-zero sem crescer o bastante para, por si só, resolver o salto — daí o
+ * teto de `distance` logo abaixo.
+ */
+const MIN_PLANE_DENOM = 0.05;
+
+/** Fração do alcance da câmera que o arrasto pode empurrar um objeto. */
+const DRAG_DISTANCE_FRACTION = 0.75;
+
+/** Segmentos de cada aro de rotação — desenho e teste de clique usam a mesma malha. */
+const RING_SEGMENTS = 40;
+
+/** Multiplicador sobre a diagonal da caixa: o aro sempre contorna o objeto girado, mesmo de lado. */
+const RING_RADIUS_SCALE = 1.35;
+
+/** Raio mínimo do aro — sem isto um objeto bem pequeno teria um aro colado nele. */
+const RING_RADIUS_MIN = 1.5;
+
+/**
+ * Cor por eixo, à la Unity/Blender: X, Y, Z.
+ *
+ * O aro de yaw gira em torno de Y (verde); o de pitch, em torno do X local
+ * (vermelho) — ver o comentário de `updateRings` sobre por que esses eixos
+ * são esses e não os "intuitivos" eixo-Y-do-objeto/eixo-de-tela.
+ */
+const AXIS_COLOR: readonly Rgb[] = [
+  fromHex("#ff4d4d"),
+  fromHex("#4dff88"),
+  fromHex("#4d9dff"),
+];
+
+/** Raio do aro: a diagonal da caixa, não a maior meia-extensão — contorna o objeto girado. */
+const ringRadiusFor = (size: Vec3): number =>
+  Math.max(
+    RING_RADIUS_MIN,
+    Math.hypot(size.x, size.y, size.z) * RING_RADIUS_SCALE,
+  );
+
+/** Folga entre o aro de yaw e a alça de altura, em unidades de mundo. */
+const HEIGHT_GAP = 0.6;
+
+/**
+ * Cor da alça de altura — deliberadamente fora da trinca de eixo (`AXIS_COLOR`),
+ * para não se confundir com a seta verde de redimensionar em Y, que fica
+ * bem perto dela.
+ */
+const HEIGHT_COLOR: Rgb = fromHex("#ffffff");
+
+/** Referências para montar a base do plano de um aro — nunca usadas como `out`. */
+const REF_X: Vec3 = vec3(1, 0, 0);
+const REF_Y: Vec3 = vec3(0, 1, 0);
+
+/**
+ * Base ortonormal de um plano, dada só a normal — sem depender da câmera.
+ *
+ * A tentação seria orientar a base pela direção de visão, para o "ângulo
+ * zero" do aro ficar sempre "para cima" na tela; mas isso degenera bem no
+ * ângulo mais comum de uso (olhar quase de frente para o próprio eixo do
+ * aro — ex.: de cima para o aro de yaw). Como o arrasto sempre mede um
+ * *delta* de ângulo em relação ao ponto do clique (ver `angleOnRing`), a
+ * orientação absoluta da base não importa — só precisa ser contínua, o que a
+ * troca de referência abaixo garante para qualquer normal unitária.
+ */
+const buildRingBasis = (normal: Vec3, outU: Vec3, outV: Vec3): void => {
+  const ref = Math.abs(normal.y) > 0.99 ? REF_X : REF_Y;
+  cross(outU, ref, normal);
+  normalize(outU, outU);
+  cross(outV, normal, outU);
+};
+
+/** Ângulo trazido para `(-π, π]` — o menor caminho entre dois ângulos. */
+const wrapAngle = (angle: number): number =>
+  ((((angle + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) -
+  Math.PI;
+
+/**
+ * A seta de uma face: onde ela caiu na tela e o que ela estica.
+ *
+ * `id` é `axis*2 + (sign===1 ? 1 : 0)` — a própria posição do handle no
+ * array `Manipulator.handles`, nunca reatribuída. Antes o array era
+ * compactado (só os handles visíveis, na ordem em que passavam o teste de
+ * `facing`), e o índice de quem estava agarrado apontava para essa lista
+ * instável: uma face que cruzava o limiar de visibilidade *durante o próprio
+ * arrasto* — coisa que redimensionar causa, ao mover o ponto de alcance da
+ * face — reordenava a lista embaixo do dedo, e o arrasto passava a mexer
+ * numa seta diferente da que foi agarrada. Indexar pela identidade em vez de
+ * pela posição elimina essa reordenação por construção.
+ */
 interface Handle {
+  readonly id: number;
+  /** `false` quando a face está de frente/costas demais — ver `MAX_FACING`. */
+  visible: boolean;
+  /** Base da seta, encostada na face. */
   col: number;
   row: number;
+  /** Ponta da seta, a `ARROW_SHAFT_COLS` de distância da base. */
+  tipCol: number;
+  tipRow: number;
   /** A seta que aponta para fora da face, escolhida em espaço de tela. */
   glyph: number;
+  /** O traço da haste, na mesma escolha horizontal/vertical da seta. */
+  shaftGlyph: number;
   /** 0, 1 ou 2 — qual meia-extensão ela mexe. */
   axis: number;
   /** Direção da face em mundo, unitária. Já carrega para que lado ela olha. */
@@ -87,25 +210,35 @@ const MODE = {
   NONE: "none",
   MOVE: "move",
   RESIZE: "resize",
+  ROTATE_YAW: "rotate-yaw",
+  ROTATE_PITCH: "rotate-pitch",
+  HEIGHT: "height",
 } as const;
 
 type Mode = (typeof MODE)[keyof typeof MODE];
 
 export class Manipulator {
   private readonly shape = new BoxShape();
-  private readonly handles: Handle[] = Array.from({ length: 6 }, () => ({
-    col: 0,
-    row: 0,
-    glyph: GLYPH.ARROW_UP,
-    axis: 0,
-    dir: vec3(),
-    stepCol: 0,
-    stepRow: 0,
-  }));
-  private handleCount = 0;
+  private readonly handles: Handle[] = Array.from(
+    { length: 6 },
+    (_, id): Handle => ({
+      id,
+      visible: false,
+      col: 0,
+      row: 0,
+      tipCol: 0,
+      tipRow: 0,
+      glyph: GLYPH.ARROW_UP,
+      shaftGlyph: GLYPH.BOX_H,
+      axis: 0,
+      dir: vec3(),
+      stepCol: 0,
+      stepRow: 0,
+    }),
+  );
 
   private mode: Mode = MODE.NONE;
-  private grabbed = -1;
+  private grabbedId = -1;
 
   private readonly ray: Vec3 = vec3();
 
@@ -120,12 +253,64 @@ export class Manipulator {
    */
   private readonly grabOffset: Vec3 = vec3();
   private readonly planeHit: Vec3 = vec3();
+  private readonly planeOrigin: Vec3 = vec3();
+  private readonly planeVec: Vec3 = vec3();
   private readonly origin: Projected = createProjected();
   private readonly probe: Projected = createProjected();
 
-  /** Se o arrasto atual está esticando uma face. Trava o giro pela roda. */
-  get resizing(): boolean {
-    return this.mode === MODE.RESIZE;
+  // --- Aros de rotação ---------------------------------------------------
+  private ringsVisible = false;
+  private ringRadius = 0;
+  private readonly ringCenter: Vec3 = vec3();
+  private readonly yawU: Vec3 = vec3();
+  private readonly yawV: Vec3 = vec3();
+  private readonly pitchU: Vec3 = vec3();
+  private readonly pitchV: Vec3 = vec3();
+  /** Normal do plano de pitch — a direção local X levada a mundo. */
+  private readonly pitchNormal: Vec3 = vec3();
+  private readonly yawWorld: Vec3[] = Array.from(
+    { length: RING_SEGMENTS },
+    () => vec3(),
+  );
+  private readonly pitchWorld: Vec3[] = Array.from(
+    { length: RING_SEGMENTS },
+    () => vec3(),
+  );
+  private readonly yawScreen: Projected[] = Array.from(
+    { length: RING_SEGMENTS },
+    () => createProjected(),
+  );
+  private readonly pitchScreen: Projected[] = Array.from(
+    { length: RING_SEGMENTS },
+    () => createProjected(),
+  );
+  private ringLastAngle = 0;
+  private readonly ringVec: Vec3 = vec3();
+  private readonly ringColor: Rgb = rgb();
+  private ringEmissive = 0;
+  private readonly ringStyle: SurfaceStyle = (sample, out) => {
+    out.glyph = GLYPH.BULLET;
+    copyRgb(out.color, this.ringColor);
+    out.alpha = 0.85;
+    out.emissive = this.ringEmissive;
+    // Interface, não incidência — mesmo motivo do contorno de seleção em
+    // `World["selectionStyle"]`: sem isto herdaria `fuse` de um fragmento
+    // reaproveitado e passaria a tingir o que está atrás em vez de riscar
+    // por cima.
+    out.fuse = false;
+    return sample.depth > 0;
+  };
+
+  // --- Alça de altura ------------------------------------------------------
+  private heightVisible = false;
+  private heightCol = 0;
+  private heightRow = 0;
+  private heightStepCol = 0;
+  private heightStepRow = 0;
+
+  /** Algum arrasto de face, aro ou alça está em andamento. Trava a roda. */
+  get manipulating(): boolean {
+    return this.mode !== MODE.NONE;
   }
 
   /**
@@ -138,8 +323,12 @@ export class Manipulator {
     camera: Camera,
     rasterizer: Rasterizer,
   ): void {
-    this.handleCount = 0;
-    if (entity === null) return;
+    if (entity === null) {
+      for (const handle of this.handles) handle.visible = false;
+      this.ringsVisible = false;
+      this.heightVisible = false;
+      return;
+    }
 
     const { current, size } = entity;
     this.shape.update(
@@ -154,8 +343,14 @@ export class Manipulator {
     const half = [size.x, size.y, size.z];
 
     for (let axis = 0; axis < 3; axis += 1) {
-      for (const sign of [-1, 1]) {
-        const handle = this.handles[this.handleCount]!;
+      for (const sign of [-1, 1] as const) {
+        const id = axis * 2 + (sign === 1 ? 1 : 0);
+        const handle = this.handles[id]!;
+        // Um handle agarrado nunca some nem perde os dados do quadro
+        // anterior: é exatamente essa troca de visibilidade, no meio do
+        // próprio arrasto, que fazia o índice antigo apontar para a seta
+        // errada (ver o comentário de `Handle`).
+        const isGrabbed = this.mode === MODE.RESIZE && this.grabbedId === id;
 
         this.shape.toWorldDirection(
           axis === 0 ? sign : 0,
@@ -169,8 +364,14 @@ export class Manipulator {
         const py = current.y + handle.dir.y * reach;
         const pz = current.z + handle.dir.z * reach;
 
-        if (facing(camera, px, py, pz, handle.dir) > MAX_FACING) continue;
-        if (!rasterizer.project(px, py, pz, this.origin)) continue;
+        if (facing(camera, px, py, pz, handle.dir) > MAX_FACING && !isGrabbed) {
+          handle.visible = false;
+          continue;
+        }
+        if (!rasterizer.project(px, py, pz, this.origin)) {
+          if (!isGrabbed) handle.visible = false;
+          continue;
+        }
         if (
           !rasterizer.project(
             px + handle.dir.x * PROBE,
@@ -179,9 +380,11 @@ export class Manipulator {
             this.probe,
           )
         ) {
+          if (!isGrabbed) handle.visible = false;
           continue;
         }
 
+        handle.visible = true;
         handle.col = Math.round(this.origin.col);
         handle.row = Math.round(this.origin.row);
         handle.axis = axis;
@@ -189,8 +392,112 @@ export class Manipulator {
         handle.stepRow = (this.probe.row - this.origin.row) / PROBE;
         handle.glyph = arrowFor(handle.stepCol, handle.stepRow);
 
-        this.handleCount += 1;
+        // A haste some na mesma comparação da cabeça: horizontal quando o
+        // passo de coluna domina, vertical quando é o de fileira.
+        const horizontal =
+          Math.abs(handle.stepCol) >= Math.abs(handle.stepRow) * CELL_ASPECT;
+        handle.shaftGlyph = horizontal ? GLYPH.BOX_H : GLYPH.BOX_V;
+
+        const dirCol = handle.stepCol;
+        const dirRow = handle.stepRow * CELL_ASPECT;
+        const dirLen = Math.hypot(dirCol, dirRow);
+        if (dirLen > 1e-6) {
+          handle.tipCol = handle.col + (dirCol / dirLen) * ARROW_SHAFT_COLS;
+          handle.tipRow =
+            handle.row + (dirRow / dirLen / CELL_ASPECT) * ARROW_SHAFT_COLS;
+        } else {
+          handle.tipCol = handle.col;
+          handle.tipRow = handle.row;
+        }
       }
+    }
+
+    this.updateRings(entity, rasterizer);
+    this.updateHeightHandle(entity, rasterizer);
+  }
+
+  /**
+   * Recalcula a alça de altura: sempre visível, sem o corte de `MAX_FACING`
+   * — ela não é seta de face, é uma alça independente, acima do objeto.
+   */
+  private updateHeightHandle(entity: EntityState, rasterizer: Rasterizer): void {
+    const { current } = entity;
+    const reach = this.ringRadius + HEIGHT_GAP;
+
+    const ok1 = rasterizer.project(
+      current.x,
+      current.y + reach,
+      current.z,
+      this.origin,
+    );
+    const ok2 = rasterizer.project(
+      current.x,
+      current.y + reach + PROBE,
+      current.z,
+      this.probe,
+    );
+
+    this.heightVisible = ok1 && ok2;
+    if (!this.heightVisible) return;
+
+    this.heightCol = Math.round(this.origin.col);
+    this.heightRow = Math.round(this.origin.row);
+    this.heightStepCol = (this.probe.col - this.origin.col) / PROBE;
+    this.heightStepRow = (this.probe.row - this.origin.row) / PROBE;
+  }
+
+  /**
+   * Recalcula os dois aros de rotação: geometria e projeção, uma vez por
+   * quadro, junto das setas — mesma razão de sempre, quem desenha e quem
+   * testa o clique não podem discordar.
+   *
+   * Eixos verificados em `math/mat4.ts::setView` e `BoxShape`: yaw é a
+   * rotação mais externa no caminho local→mundo, então seu eixo em mundo é
+   * sempre `WORLD_UP` fixo — nunca `shape.toWorldDirection(0,1,0,…)`, que
+   * tangeria com o pitch atual. O eixo de pitch é a direção local X levada a
+   * mundo (`toWorldDirection(1,0,0,…)`): rotação em torno de X não move o
+   * próprio eixo X, então essa direção depende só do yaw, e fica estável
+   * durante o próprio arrasto de pitch — exatamente o que se quer de um
+   * gizmo (o eixo não "fugir" enquanto se gira em torno dele).
+   */
+  private updateRings(entity: EntityState, rasterizer: Rasterizer): void {
+    copy(this.ringCenter, entity.current);
+    this.ringRadius = ringRadiusFor(entity.size);
+
+    buildRingBasis(WORLD_UP, this.yawU, this.yawV);
+    this.shape.toWorldDirection(1, 0, 0, this.pitchNormal);
+    buildRingBasis(this.pitchNormal, this.pitchU, this.pitchV);
+
+    this.sampleRing(rasterizer, this.yawU, this.yawV, this.yawWorld, this.yawScreen);
+    this.sampleRing(
+      rasterizer,
+      this.pitchU,
+      this.pitchV,
+      this.pitchWorld,
+      this.pitchScreen,
+    );
+    this.ringsVisible = true;
+  }
+
+  private sampleRing(
+    rasterizer: Rasterizer,
+    u: Vec3,
+    v: Vec3,
+    world: Vec3[],
+    screen: Projected[],
+  ): void {
+    for (let i = 0; i < RING_SEGMENTS; i += 1) {
+      const angle = (i / RING_SEGMENTS) * Math.PI * 2;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      const point = world[i]!;
+      point.x = this.ringCenter.x + (u.x * cos + v.x * sin) * this.ringRadius;
+      point.y = this.ringCenter.y + (u.y * cos + v.y * sin) * this.ringRadius;
+      point.z = this.ringCenter.z + (u.z * cos + v.z * sin) * this.ringRadius;
+      // Falha de projeção (ponto atrás do near plane) mantém a amostra do
+      // quadro anterior — aceitável, o pior caso é uma resposta de clique
+      // ligeiramente atrasada num aro já quase de perfil.
+      rasterizer.project(point.x, point.y, point.z, screen[i]!);
     }
   }
 
@@ -209,10 +516,26 @@ export class Manipulator {
     col: number,
     row: number,
   ): void {
-    this.grabbed = this.handleAt(col, row);
-    if (this.grabbed >= 0) {
+    this.grabbedId = this.handleAt(col, row);
+    if (this.grabbedId >= 0) {
       this.mode = MODE.RESIZE;
       return;
+    }
+
+    const selected = world.selected;
+    if (selected !== null) {
+      const ring = this.ringHitTest(col, row);
+      if (ring !== null) {
+        this.mode = ring === "yaw" ? MODE.ROTATE_YAW : MODE.ROTATE_PITCH;
+        this.ringLastAngle =
+          this.angleOnRing(ring, selected, camera, rasterizer, col, row) ?? 0;
+        return;
+      }
+
+      if (this.heightHandleAt(col, row)) {
+        this.mode = MODE.HEIGHT;
+        return;
+      }
     }
 
     const { position } = camera;
@@ -262,12 +585,7 @@ export class Manipulator {
     sub(this.grabOffset, entity.position, this.planeHit);
   }
 
-  /**
-   * Onde o raio que atravessa uma célula fura um plano horizontal.
-   *
-   * `false` quando ele é paralelo ao plano ou o encontra atrás da câmera —
-   * nos dois casos não existe ponto para arrastar até.
-   */
+  /** Atalho para o plano horizontal na altura do objeto — o caso de sempre. */
   private planePoint(
     camera: Camera,
     rasterizer: Rasterizer,
@@ -276,20 +594,142 @@ export class Manipulator {
     planeY: number,
     out: Vec3,
   ): boolean {
+    set(this.planeOrigin, 0, planeY, 0);
+    return this.planePointGeneric(
+      camera,
+      rasterizer,
+      col,
+      row,
+      this.planeOrigin,
+      WORLD_UP,
+      out,
+    );
+  }
+
+  /**
+   * Onde o raio que atravessa uma célula fura um plano qualquer.
+   *
+   * `false` só quando o plano fica atrás da câmera — quase paralelo ao raio
+   * não é mais motivo de recusa: o denominador é grampeado (preservando o
+   * sinal) e a distância resultante tem um teto, então o pior caso é o ponto
+   * parar no fim do alcance de arrasto, na direção do cursor, em vez de
+   * disparar para uma coordenada absurda. É o que faz arrastar perto do
+   * horizonte da câmera continuar previsível em vez de arremessar o objeto.
+   */
+  private planePointGeneric(
+    camera: Camera,
+    rasterizer: Rasterizer,
+    col: number,
+    row: number,
+    planeOrigin: Vec3,
+    planeNormal: Vec3,
+    out: Vec3,
+  ): boolean {
     rasterizer.rayThrough(col, row, this.ray);
-    if (Math.abs(this.ray.y) < 1e-4) return false;
+    const denom = dot(this.ray, planeNormal);
+    const safeDenom =
+      Math.abs(denom) < MIN_PLANE_DENOM
+        ? denom < 0
+          ? -MIN_PLANE_DENOM
+          : MIN_PLANE_DENOM
+        : denom;
 
     const { position } = camera;
-    const distance = (planeY - position.y) / this.ray.y;
+    sub(this.planeVec, planeOrigin, position);
+    const toPlane = dot(this.planeVec, planeNormal);
+
+    let distance = toPlane / safeDenom;
     if (distance <= 0) return false;
+    distance = Math.min(distance, camera.far * DRAG_DISTANCE_FRACTION);
 
     set(
       out,
       position.x + this.ray.x * distance,
-      planeY,
+      position.y + this.ray.y * distance,
       position.z + this.ray.z * distance,
     );
     return true;
+  }
+
+  /** Qual aro está sob a célula, ou `null`. Mesmo teste de segmento das setas. */
+  private ringHitTest(col: number, row: number): "yaw" | "pitch" | null {
+    if (!this.ringsVisible) return null;
+
+    let best = GRAB_RADIUS_COLS;
+    let hit: "yaw" | "pitch" | null = null;
+
+    for (let i = 0; i < RING_SEGMENTS; i += 1) {
+      const a = this.yawScreen[i]!;
+      const b = this.yawScreen[(i + 1) % RING_SEGMENTS]!;
+      const distance = distanceToSegmentCols(col, row, a.col, a.row, b.col, b.row);
+      if (distance <= best) {
+        best = distance;
+        hit = "yaw";
+      }
+    }
+    for (let i = 0; i < RING_SEGMENTS; i += 1) {
+      const a = this.pitchScreen[i]!;
+      const b = this.pitchScreen[(i + 1) % RING_SEGMENTS]!;
+      const distance = distanceToSegmentCols(col, row, a.col, a.row, b.col, b.row);
+      if (distance <= best) {
+        best = distance;
+        hit = "pitch";
+      }
+    }
+    return hit;
+  }
+
+  /** A alça de altura está sob a célula. Mesmo teste de segmento das setas. */
+  private heightHandleAt(col: number, row: number): boolean {
+    if (!this.heightVisible) return false;
+    return (
+      distanceToSegmentCols(
+        col,
+        row,
+        this.heightCol,
+        this.heightRow - 1,
+        this.heightCol,
+        this.heightRow + 1,
+      ) <= GRAB_RADIUS_COLS
+    );
+  }
+
+  /**
+   * Ângulo do ponto sob a célula, em torno do eixo do aro escolhido.
+   *
+   * O plano é o do próprio aro (normal = eixo de yaw ou de pitch, origem no
+   * centro do objeto); o ângulo é medido na base ortonormal desse plano, a
+   * mesma que posicionou os pontos amostrados. `null` quando o plano cai
+   * atrás da câmera — mesmo caso de `planePointGeneric`.
+   */
+  private angleOnRing(
+    which: "yaw" | "pitch",
+    entity: EntityState,
+    camera: Camera,
+    rasterizer: Rasterizer,
+    col: number,
+    row: number,
+  ): number | null {
+    const normal = which === "yaw" ? WORLD_UP : this.pitchNormal;
+    const u = which === "yaw" ? this.yawU : this.pitchU;
+    const v = which === "yaw" ? this.yawV : this.pitchV;
+
+    if (
+      !this.planePointGeneric(
+        camera,
+        rasterizer,
+        col,
+        row,
+        entity.current,
+        normal,
+        this.planeHit,
+      )
+    ) {
+      return null;
+    }
+
+    sub(this.ringVec, this.planeHit, entity.current);
+    return Math.atan2(dot(this.ringVec, v), dot(this.ringVec, u));
   }
 
   /** O botão continua pressionado. Deslocamentos em células de tela. */
@@ -308,6 +748,26 @@ export class Manipulator {
 
     if (this.mode === MODE.RESIZE) {
       this.resize(entity, deltaCol, deltaRow);
+      return;
+    }
+
+    if (this.mode === MODE.ROTATE_YAW || this.mode === MODE.ROTATE_PITCH) {
+      const which = this.mode === MODE.ROTATE_YAW ? "yaw" : "pitch";
+      const angle = this.angleOnRing(which, entity, camera, rasterizer, col, row);
+      if (angle === null) return;
+
+      // Delta acumulado quadro a quadro, não "ângulo atual − ângulo do
+      // clique": é o que permite girar mais de 180° num arrasto só sem
+      // saltar quando `atan2` cruza de π para -π.
+      const delta = wrapAngle(angle - this.ringLastAngle);
+      if (which === "yaw") entity.yaw += delta;
+      else entity.pitch += delta;
+      this.ringLastAngle = angle;
+      return;
+    }
+
+    if (this.mode === MODE.HEIGHT) {
+      this.dragHeight(entity, deltaCol, deltaRow);
       return;
     }
 
@@ -340,52 +800,182 @@ export class Manipulator {
 
   release(): void {
     this.mode = MODE.NONE;
-    this.grabbed = -1;
+    this.grabbedId = -1;
   }
 
   rotate(entity: EntityState, steps: number): void {
     entity.yaw += steps * WHEEL_YAW;
   }
 
-  /** Índice da seta sob a célula, ou -1. */
+  /**
+   * `id` da seta sob a célula, ou -1.
+   *
+   * Testa a distância ao traço de fato desenhado — base até ponta — em vez
+   * de uma caixa fixa em volta da base: a área clicável passa a coincidir
+   * com a área visível, então setas vizinhas não se sobrepõem no meio do
+   * arrasto e o clique não "acerta" um espaço vazio que só existia na antiga
+   * caixa de tolerância.
+   */
   private handleAt(col: number, row: number): number {
-    for (let index = 0; index < this.handleCount; index += 1) {
-      const handle = this.handles[index]!;
-      if (
-        Math.abs(handle.col - col) <= GRAB_COLS &&
-        Math.abs(handle.row - row) <= GRAB_ROWS
-      ) {
-        return index;
-      }
+    for (const handle of this.handles) {
+      if (!handle.visible) continue;
+      const distance = distanceToSegmentCols(
+        col,
+        row,
+        handle.col,
+        handle.row,
+        handle.tipCol,
+        handle.tipRow,
+      );
+      if (distance <= GRAB_RADIUS_COLS) return handle.id;
     }
     return -1;
   }
 
   /**
-   * As setas, por cima de tudo.
+   * As setas, por cima de tudo, e os dois aros de rotação.
    *
-   * Em `OVERLAY_DEPTH` porque são interface: uma seta escondida atrás do
-   * próprio objeto que ela redimensiona não serviria para nada.
+   * As setas ficam em `OVERLAY_DEPTH` porque são interface: uma seta
+   * escondida atrás do próprio objeto que ela redimensiona não serviria para
+   * nada. Os aros não podem seguir o mesmo caminho — `rasterizer.line()` usa
+   * a profundidade real do segmento, não há como forçar overlay nela — mas
+   * isso é aceitável: é o mesmo padrão do contorno de seleção
+   * (`World["drawSelection"]`), que também nunca foi overlay.
    */
-  draw(framebuffer: Framebuffer, hoverCol: number, hoverRow: number): void {
-    const hovered =
+  draw(
+    framebuffer: Framebuffer,
+    rasterizer: Rasterizer,
+    hoverCol: number,
+    hoverRow: number,
+  ): void {
+    const hoveredId =
       this.mode === MODE.RESIZE
-        ? this.grabbed
+        ? this.grabbedId
         : this.handleAt(hoverCol, hoverRow);
 
-    for (let index = 0; index < this.handleCount; index += 1) {
-      const handle = this.handles[index]!;
-      const active = index === hovered;
+    for (const handle of this.handles) {
+      if (!handle.visible) continue;
+      const active = handle.id === hoveredId;
+      const color = AXIS_COLOR[handle.axis]!;
+      const emissive = active ? 0.9 : 0.25;
+
+      // A haste, célula a célula, até a ponta — é isso que faz a seta ocupar
+      // mais que um caractere e a área de clique acima poder seguir o mesmo
+      // traço.
+      for (let step = 1; step < ARROW_SHAFT_COLS; step += 1) {
+        const t = step / ARROW_SHAFT_COLS;
+        const col = Math.round(handle.col + (handle.tipCol - handle.col) * t);
+        const row = Math.round(handle.row + (handle.tipRow - handle.row) * t);
+        framebuffer.plot(
+          col,
+          row,
+          handle.shaftGlyph,
+          color,
+          OVERLAY_DEPTH,
+          1,
+          emissive,
+        );
+      }
+
       framebuffer.plot(
-        handle.col,
-        handle.row,
+        Math.round(handle.tipCol),
+        Math.round(handle.tipRow),
         handle.glyph,
-        active ? MENU_COLORS.FOCUS : MENU_COLORS.VALUE,
+        color,
         OVERLAY_DEPTH,
         1,
-        active ? 0.9 : 0.25,
+        emissive,
       );
     }
+
+    const hoveredRing =
+      this.mode === MODE.ROTATE_YAW
+        ? "yaw"
+        : this.mode === MODE.ROTATE_PITCH
+          ? "pitch"
+          : this.ringHitTest(hoverCol, hoverRow);
+
+    this.drawRing(rasterizer, this.yawWorld, AXIS_COLOR[1]!, hoveredRing === "yaw");
+    this.drawRing(
+      rasterizer,
+      this.pitchWorld,
+      AXIS_COLOR[0]!,
+      hoveredRing === "pitch",
+    );
+
+    if (this.heightVisible) {
+      const activeHeight =
+        this.mode === MODE.HEIGHT || this.heightHandleAt(hoverCol, hoverRow);
+      const emissive = activeHeight ? 0.9 : 0.25;
+
+      framebuffer.plot(
+        this.heightCol,
+        this.heightRow - 1,
+        GLYPH.ARROW_UP,
+        HEIGHT_COLOR,
+        OVERLAY_DEPTH,
+        1,
+        emissive,
+      );
+      framebuffer.plot(
+        this.heightCol,
+        this.heightRow,
+        GLYPH.ARROW_VERTICAL,
+        HEIGHT_COLOR,
+        OVERLAY_DEPTH,
+        1,
+        emissive,
+      );
+      framebuffer.plot(
+        this.heightCol,
+        this.heightRow + 1,
+        GLYPH.ARROW_DOWN,
+        HEIGHT_COLOR,
+        OVERLAY_DEPTH,
+        1,
+        emissive,
+      );
+    }
+  }
+
+  private drawRing(
+    rasterizer: Rasterizer,
+    world: readonly Vec3[],
+    color: Rgb,
+    active: boolean,
+  ): void {
+    if (!this.ringsVisible) return;
+    copyRgb(this.ringColor, color);
+    this.ringEmissive = active ? 0.9 : 0.25;
+
+    for (let i = 0; i < RING_SEGMENTS; i += 1) {
+      const a = world[i]!;
+      const b = world[(i + 1) % RING_SEGMENTS]!;
+      rasterizer.line(a.x, a.y, a.z, b.x, b.y, b.z, this.ringStyle);
+    }
+  }
+
+  /**
+   * Sobe ou desce o objeto pela alça de altura.
+   *
+   * Mesma projeção escalar do `resize()` — o deslocamento do mouse contra o
+   * passo de tela do eixo Y naquele quadro —, escalada por profundidade e
+   * campo de visão em vez do `VERTICAL_DRAG` fixo do Shift+arrastar. Os dois
+   * caminhos nunca competem no mesmo quadro: são modos exclusivos.
+   */
+  private dragHeight(
+    entity: EntityState,
+    deltaCol: number,
+    deltaRow: number,
+  ): void {
+    const stepX = this.heightStepCol;
+    const stepY = this.heightStepRow * CELL_ASPECT;
+    const lengthSq = stepX * stepX + stepY * stepY;
+    if (lengthSq < 1e-6) return;
+
+    const moved =
+      (deltaCol * stepX + deltaRow * CELL_ASPECT * stepY) / lengthSq;
+    entity.position.y += moved;
   }
 
   /**
@@ -406,7 +996,7 @@ export class Manipulator {
     deltaCol: number,
     deltaRow: number,
   ): void {
-    const handle = this.handles[this.grabbed];
+    const handle = this.handles[this.grabbedId];
     if (handle === undefined) return;
 
     const stepX = handle.stepCol;
@@ -459,6 +1049,42 @@ const facing = (
   const length = Math.hypot(dx, dy, dz);
   if (length === 0) return 1;
   return Math.abs((dx * dir.x + dy * dir.y + dz * dir.z) / length);
+};
+
+/**
+ * Distância de uma célula a um segmento de tela, em colunas equivalentes.
+ *
+ * Reaproveitada pelo hit-test das setas e, mais tarde, dos aros de rotação:
+ * os dois são traços poligonais em tela, e "está perto o bastante de um
+ * traço" é a mesma pergunta para ambos. Pesa a fileira por `CELL_ASPECT`
+ * pelo mesmo motivo de sempre — a célula não é quadrada.
+ */
+const distanceToSegmentCols = (
+  col: number,
+  row: number,
+  aCol: number,
+  aRow: number,
+  bCol: number,
+  bRow: number,
+): number => {
+  const ax = aCol;
+  const ay = aRow * CELL_ASPECT;
+  const bx = bCol;
+  const by = bRow * CELL_ASPECT;
+  const px = col;
+  const py = row * CELL_ASPECT;
+
+  const abx = bx - ax;
+  const aby = by - ay;
+  const lenSq = abx * abx + aby * aby;
+  const t =
+    lenSq < 1e-9
+      ? 0
+      : Math.max(0, Math.min(1, ((px - ax) * abx + (py - ay) * aby) / lenSq));
+
+  const cx = ax + abx * t;
+  const cy = ay + aby * t;
+  return Math.hypot(px - cx, py - cy);
 };
 
 /**

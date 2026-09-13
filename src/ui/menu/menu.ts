@@ -12,8 +12,9 @@ import {
   type MenuGroup,
   type MenuItem,
   adjustItem,
-  clampToRange,
+  choiceArrowDirection,
   isFocusable,
+  sliderRatioValue,
 } from "./model";
 
 /**
@@ -200,6 +201,9 @@ export class Menu {
       case "toggle":
         item.set(!item.get());
         return;
+      case "choice":
+        adjustItem(item, 1);
+        return;
       case "action":
         item.run();
         // A ação pode ter criado ou apagado um objeto: a lista mudou.
@@ -279,16 +283,34 @@ export class Menu {
     const col = this.cursor.col;
     const rowIndex = this.cursor.row;
 
+    if (!events.down) {
+      this.draggingSlider = -1;
+      this.manipulator.release();
+    }
+
+    // Um slider agarrado continua respondendo à coluna do cursor sozinha,
+    // não importa a linha: exigir a linha certa é o que fazia o arrasto
+    // lateral "travar" ao menor tremor vertical do mouse.
+    if (this.draggingSlider >= 0 && events.down) {
+      const item = this.items[this.draggingSlider];
+      if (item !== undefined && item.kind === "slider") {
+        item.set(
+          sliderRatioValue(
+            item,
+            this.cursor.exactCol,
+            layout.trackCol,
+            layout.trackWidth,
+          ),
+        );
+      }
+      return;
+    }
+
     const insideBox =
       col >= layout.col &&
       col < layout.col + layout.width &&
       rowIndex >= layout.row &&
       rowIndex < layout.row + layout.height;
-
-    if (!events.down) {
-      this.draggingSlider = -1;
-      this.manipulator.release();
-    }
 
     if (insideBox) {
       this.handleMenuPointer(events, layout, col, rowIndex);
@@ -353,30 +375,33 @@ export class Menu {
       this.itemIndex = index;
       this.onGroups = false;
 
-      if (onTrack) {
+      const choiceDir = choiceArrowDirection(
+        item,
+        col,
+        layout.trackCol,
+        layout.trackWidth,
+      );
+
+      if (choiceDir !== 0) {
+        adjustItem(item, choiceDir);
+      } else if (onTrack) {
         this.draggingSlider = index;
+        // Escrever já no clique, e não só ao arrastar: numa trilha, clicar em
+        // um ponto significa "vá para cá". Exigir arrasto faria um clique
+        // simples não fazer nada, que é o defeito mais chato de slider. A
+        // continuação do arrasto, coluna a coluna, é tratada em
+        // `handlePointer` — sem depender de `item`/`index` desta linha.
+        item.set(
+          sliderRatioValue(
+            item,
+            this.cursor.exactCol,
+            layout.trackCol,
+            layout.trackWidth,
+          ),
+        );
       } else if (item.kind !== "slider") {
         this.activate(item);
       }
-    }
-
-    // Escrever já no clique, e não só ao arrastar: numa trilha, clicar em
-    // um ponto significa "vá para cá". Exigir arrasto faria um clique
-    // simples não fazer nada, que é o defeito mais chato de slider.
-    if (
-      item.kind === "slider" &&
-      onTrack &&
-      (events.pressed || this.draggingSlider === index)
-    ) {
-      // A posição exata, não a célula inteira: senão a trilha só responde a
-      // cada `cellWidth` pixels de mouse, e um slider de faixa larga vira
-      // um punhado de saltos em vez de seguir o arrasto.
-      const ratio =
-        (this.cursor.exactCol - layout.trackCol) /
-        Math.max(1, layout.trackWidth - 1);
-      const value =
-        item.min + Math.max(0, Math.min(1, ratio)) * (item.max - item.min);
-      item.set(clampToRange(value, item));
     }
   }
 
@@ -419,7 +444,7 @@ export class Menu {
     const selected = this.world.selected;
     if (selected === null) return;
 
-    if (events.wheel !== 0 && !this.manipulator.resizing) {
+    if (events.wheel !== 0 && !this.manipulator.manipulating) {
       this.manipulator.rotate(selected, events.wheel);
       return;
     }
@@ -438,14 +463,19 @@ export class Menu {
     );
   }
 
-  draw(framebuffer: Framebuffer): void {
+  draw(framebuffer: Framebuffer, rasterizer: Rasterizer): void {
     const layout = this.layout;
     if (!this.open || layout === null) return;
 
     // As setas de face saem antes do painel: se o objeto estiver atrás do
     // menu, quem manda é o menu.
     if (this.editing)
-      this.manipulator.draw(framebuffer, this.hoverCol, this.hoverRow);
+      this.manipulator.draw(
+        framebuffer,
+        rasterizer,
+        this.hoverCol,
+        this.hoverRow,
+      );
 
     drawMenu(framebuffer, layout, {
       groups: this.groups,
