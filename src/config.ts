@@ -6,13 +6,30 @@
  * quando não existia câmera. Horizonte agora é para onde a câmera olha, e o sol
  * tem elevação e azimute como qualquer corpo celeste.
  */
-import { type SurfaceTexture, TEXTURE } from "./render/ramp";
+import {type SurfaceTexture, TEXTURE} from "./render/ramp";
+
+/** De onde o atlas tira o desenho dos glifos que não são pintados à mão. */
+export const FONT = {
+  SYSTEM: "system",
+  OLDSCHOOL: "oldschool",
+} as const;
+export type FontChoice = (typeof FONT)[keyof typeof FONT];
 
 export interface Settings {
   fovDegrees: number;
   moveSpeed: number;
   /** Radianos de giro por pixel de mouse. */
   lookSensitivity: number;
+  /**
+   * Multiplicador do teto de colunas/fileiras (`MAX_COLS`/`MAX_ROWS`,
+   * `render/viewport.ts`), não do backing store — a nitidez de cada célula
+   * continua só com `devicePixelRatio`. Mais colunas/fileiras é mais
+   * caractere por tela, então isto paga CPU de verdade (ver README, "Custo");
+   * não é o multiplicador "de graça" que era antes de virar teto de grade.
+   */
+  renderScale: number;
+  /** Fonte do atlas para os glifos que vêm de texto, não de `PAINTERS`. */
+  fontFamily: FontChoice;
 
   /** Unidades de mundo entre duas linhas da grade. */
   gridSize: number;
@@ -43,7 +60,18 @@ export interface Settings {
   sunAzimuth: number;
   /** Raio angular do disco, em graus. */
   sunAngularSize: number;
-  sunSlices: number;
+  /** Fileiras de tela por fatia — maior é fatia mais grossa, ou seja, menos fatias. */
+  sunSliceRows: number;
+  /** Fração de cada fatia que vira vão. */
+  sunSliceGap: number;
+  /**
+   * O roxo lavando a faixa do horizonte, em volta do sol — desliga só essa
+   * camada; o disco, a luz e o resto do céu (banda ciano, glow rosa) continuam.
+   */
+  sunWashEnabled: boolean;
+  /** Alcance do roxo em volta do sol, relativo ao padrão. */
+  sunWashSize: number;
+  sunWashIntensity: number;
 
   starCount: number;
 
@@ -97,6 +125,8 @@ export const settings: Settings = {
   fovDegrees: 70,
   moveSpeed: 12,
   lookSensitivity: 0.0022,
+  renderScale: 1,
+  fontFamily: FONT.OLDSCHOOL,
 
   gridSize: 16,
   gridTexture: TEXTURE.SMOOTH,
@@ -107,10 +137,14 @@ export const settings: Settings = {
   groundHaze: 0.35,
 
   sunEnabled: false,
-  sunElevation: 4,
+  sunElevation: 20,
   sunAzimuth: 0,
   sunAngularSize: 13,
-  sunSlices: 1.1,
+  sunSliceRows: 2.5,
+  sunSliceGap: 0.5,
+  sunWashEnabled: true,
+  sunWashSize: 1,
+  sunWashIntensity: 2,
 
   starCount: 500,
 
@@ -119,10 +153,10 @@ export const settings: Settings = {
   reflectionsEnabled: true,
   ambientLevel: 0.05,
   gridGlow: 0.1,
-  sunLightIntensity: 1,
-  skyReflectionIntensity: 0.3,
+  sunLightIntensity: 0.7,
+  skyReflectionIntensity: 1,
   groundReflectivity: 1,
-  groundFillLight: 0.62,
+  groundFillLight: 1,
   groundGloss: 2,
   rampWeight: 10,
   rampExposure: 0.5,

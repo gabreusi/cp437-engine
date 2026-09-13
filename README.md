@@ -15,7 +15,7 @@ npm run build    # typecheck + bundle estático em dist/
 npm run preview  # serve o dist/ para conferir o build
 ```
 
-Requer WebGL2 e nada mais: não há dependência de runtime. Vite e TypeScript são
+Requer WebGPU e nada mais: não há dependência de runtime. Vite e TypeScript são
 ferramentas de build.
 
 ## O nome
@@ -87,21 +87,25 @@ Rasterizer (CPU)             mundo → view → clip no near plane → projeçã
                              → célula fracionária → clip 2D → DDA
                              posição de mundo interpolada por fragmento
         ▼
-shadeSurface (CPU)           ambiente + luzes (raio de sombra) + reflexo
-                             (lóbulo no céu, ou raio de espelho nos corpos)
+SurfacePen.style (CPU)        preenche o G-buffer (posição, normal, material,
+                             forma); sem luz, o glifo geométrico sai direto
         ▼
-rampa de glifos              luminância + textura → caractere
+Framebuffer (CPU)            dois planos RGBA8 (glifo/alpha/emissivo, cor)
+                             mais o G-buffer, para quem tem luz
         ▼
-Framebuffer (CPU)            dois planos RGBA8: glifo/alpha/emissivo e cor
+──── fronteira CPU/GPU: G-buffer e planos sobem como texturas por quadro ────
         ▼
-──── fronteira CPU/GPU: dois texSubImage2D de ~86 KB por quadro ────
+ShadingPass (GPU, compute)    shadeSurface + rampa de glifos: ambiente + luzes
+                             (raio de sombra) + reflexo (lóbulo no céu, ou raio
+                             de espelho) → luminância + textura → caractere
         ▼
-GlPresenter (GPU)            céu → grid → bloom → composite
+GpuPresenter (WebGPU)         céu → grid → bloom → composite
 ```
 
 O grid inteiro sai em **um draw call**: um triângulo que cobre a tela, e o
-fragment shader descobre em que célula caiu, lê glifo e cor em duas _data
-textures_ e amostra o atlas de fontes. Não existe quad por célula.
+fragment shader descobre em que célula caiu, lê glifo e cor nas duas _data
+textures_ que `ShadingPass` produziu, e amostra o atlas de fontes. Não existe
+quad por célula.
 
 ## Decisões que explicam o código
 
@@ -135,9 +139,9 @@ coplanares, e a fileira na tela é função apenas da profundidade — então nu
 mesma fileira as duas têm profundidade matematicamente igual. Sem folga, o ruído
 de ponto flutuante rejeita metade das células e a grade sai picotada.
 
-**Perda de contexto é tratada desde o começo.** `webglcontextlost` acontece em
-suspensão de aba e troca de GPU; sem recriar os recursos a tela fica preta para
-sempre.
+**Perda de dispositivo é tratada desde o começo.** `device.lost` (o equivalente
+WebGPU de `webglcontextlost`) acontece em suspensão de aba e troca de GPU; sem
+recriar os recursos a tela fica preta para sempre.
 
 ### As decisões da iluminação
 
@@ -347,8 +351,8 @@ menos.
 balde de quatro nem de uma indexação cega.** Inspirado em
 alexharri.com/blog/ascii-rendering: cada glifo candidato tem um vetor de
 seis amostras, medido lendo o próprio canvas do atlas (`glyph-shape.ts`,
-`render/gl/atlas.ts`) — o mesmo bitmap que a GPU usa para desenhar, à mão ou
-da fonte do sistema, tanto faz. A reta que o rasterizador está desenhando
+`render/atlas-canvas.ts`) — o mesmo bitmap que a GPU usa para desenhar, à mão
+ou da fonte do sistema, tanto faz. A reta que o rasterizador está desenhando
 tem uma forma local (direção mais onde exatamente ela cruza a célula,
 `offsetCol`/`offsetRow`) que o vizinho mais próximo compara contra os
 candidatos, **junto com** a cobertura-alvo que a luz pede — as duas coisas
@@ -492,8 +496,10 @@ src/
     types.ts         luz, material, corpo, modelo de céu
     world.ts         luzes e corpos do quadro, com pool
     trace.ts         raio contra esfera e caixa orientada; sombra e espelho
-    sky.ts           o que um raio vê ao olhar para o céu
-    shade.ts         o kernel: uma superfície, todas as luzes, uma cor
+    mirror-bounce.ts espelho vira fonte de luz secundária, um bounce só
+    shade.ts         queda de luz e tingimento de occluders para reflexo — o
+                     kernel de sombreamento por fragmento em si vive em
+                     render/gpu/passes/shading.ts (WGSL)
   render/
     viewport.ts      teto de colunas, tamanho de célula, devicePixelRatio
     camera.ts        posição, yaw, pitch, fov
@@ -504,13 +510,15 @@ src/
     palette.ts       cores nomeadas e os 256 glifos
     text.ts          texto e molduras escritos na grade
     sky-colors.ts    as cores do céu, compartilhadas com o shader
+    atlas-canvas.ts  o canvas 2D com os 256 glifos, que o atlas da GPU sobe
     debug-dump.ts    despeja o framebuffer como texto
-    gl/
-      context.ts     contexto, resize, perda, suporte a meia precisão
-      atlas.ts       atlas de glifos, fonte mais os desenhados à mão
-      program.ts     compilação e cache de uniforms
+    gpu/
+      context.ts     dispositivo WebGPU, resize, perda
+      atlas.ts       sobe o atlas de glifos como textura
+      light-upload.ts luzes e occluders para a GPU, como storage buffer
       presenter.ts   orquestra os passes; captura fora da tela, para diagnóstico
-      passes/        background, grid, bloom, composite
+      passes/        shading (compute, WGSL — o kernel de luz e a escolha de
+                     glifo), background, grid, bloom, composite
   scene/
     scene.ts         Renderable, contribute e render
     ground.ts        grade infinita, e o chão entre as linhas onde há luz

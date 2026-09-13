@@ -50,3 +50,19 @@ export const SKY_GLSL: string = [
   `const float GLOW_WEIGHT = ${SKY_WEIGHT.GLOW.toFixed(3)};`,
   `const float BAND_WEIGHT = ${SKY_WEIGHT.BAND.toFixed(3)};`,
 ].join("\n");
+
+/**
+ * `const vec3 NOME = vec3(...)` (GLSL) vira `const NOME = vec3f(...)`
+ * (WGSL): o tipo entra depois do nome em WGSL (`nome: tipo`), não antes
+ * como em GLSL/C, então a troca certa é *remover* a palavra-chave de tipo
+ * da declaração — o inicializador já entrega o tipo, WGSL infere sozinho —
+ * e só trocar o nome do construtor (`vec3(` → `vec3f(`).
+ *
+ * Único conversor GLSL→WGSL da engine: `BackgroundPass` e `ShadingPass`
+ * (`skyRadiance`) compartilham `SKY_GLSL` através dele, para as cores do céu
+ * nunca terem uma segunda cópia hand-typed que possa divergir da primeira.
+ */
+export const toWgslConstants = (glsl: string): string =>
+  glsl
+    .replace(/const (?:vec3|float) (\w+) = /g, "const $1 = ")
+    .replace(/\bvec3\(/g, "vec3f(");

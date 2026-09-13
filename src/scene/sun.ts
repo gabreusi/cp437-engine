@@ -1,9 +1,11 @@
 import { degreesToRadians, settings } from "../config";
-import { copyRgb } from "../math/color";
+import { copyRgb, rgb, scaleRgb, type Rgb } from "../math/color";
 import { copy } from "../math/vec3";
 import { LIGHT } from "../light/types";
-import { GLYPH, SUN_SHADES } from "../render/palette";
+import { SUN_SHADES } from "../render/palette";
+import { glyphForDiscEdge } from "../render/ramp";
 import { createProjected } from "../render/rasterizer";
+import { CELL_ASPECT } from "../render/viewport";
 import type { RenderContext, Renderable } from "./scene";
 
 /**
@@ -30,6 +32,17 @@ const GLOW_SPAN = 0.22;
 
 /** Quanto o topo do disco passa de 1. É o que o bloom transforma em halo. */
 const SUN_EMISSIVE = 0.85;
+const SUN_TOP_BRIGHTNESS = 1 + SUN_EMISSIVE;
+
+/**
+ * Base do disco: baixo o bastante para `glyphForDiscEdge` escolher um glifo
+ * quase vazio, sem chegar a zero — o vazio de verdade fica por conta do
+ * recorte do horizonte, não desta rampa.
+ */
+const SUN_BOTTOM_BRIGHTNESS = 0.15;
+
+/** Rascunho de módulo: cor final de uma célula do disco, já com o brilho aplicado. */
+const tint: Rgb = rgb();
 
 /**
  * O sol com que os pesos do céu foram escolhidos.
@@ -65,38 +78,63 @@ const HORIZON_GLOW_FLOOR = 0.15;
  *
  * Só a metade de baixo é fatiada, e a última faixa fica inteira para o sol
  * assentar no horizonte em vez de terminar picotado.
+ *
+ * Duas configurações diretas, cada uma controlando uma coisa só: `sunSliceRows`
+ * é quantas fileiras de tela cada fatia ocupa — maior é fatia mais grossa, ou
+ * seja, menos fatias — e `sunSliceGap` é quanto de cada fatia vira vão. Antes
+ * disso um único slider (`sunSlices`) tentava fazer as duas coisas ao mesmo
+ * tempo — mais fatias também apertava o vão — e as duas pontas do range
+ * colapsavam em quase nada visível: fatias finas demais para a resolução de
+ * tela de um lado, vão grande demais engolindo o disco do outro.
+ *
+ * O retorno não é um `bool` de "tem vão ou não": é um multiplicador de brilho,
+ * suave só bem perto das bordas do vão e achatado no mínimo (nunca zero) por
+ * todo o resto dele — quem decide o glifo ali é o casamento de forma/cobertura
+ * de `glyphForDiscEdge`, a mesma ferramenta que qualquer disco da engine usa,
+ * não mais um corte binário que pulava a célula inteira. O achatamento importa
+ * mais do que parece: a assinatura outrun depende do vão ler como um corte
+ * decidido, e um vão de meia-senoide (mínimo só num instante) se perdia fácil
+ * quando cabiam poucas fileiras de tela nele — quase sempre o caso, já que só
+ * a metade de baixo do disco é fatiada.
  */
-const isSunSliceGap = (localRow: number, sunRowCount: number): boolean => {
-  const sliceStartRow = sunRowCount * 0.5;
-  if (localRow < sliceStartRow) return false;
+const SLICE_START_FRACTION = 0.5;
+const BASE_STRIPE_FRACTION = 0.08;
+/** Nunca some de vez: um vão apagado ainda deixa `glyphForDiscEdge` escolher algo esparso. */
+const SLICE_GAP_MIN_BRIGHTNESS = 0.04;
+/** Fração de cada vão gasta suavizando cada borda; o meio fica no mínimo. */
+const SLICE_GAP_EDGE_SOFTNESS = 0.25;
+/** Os vãos engrossam conforme descem, o que sugere o sol afundando. */
+const SLICE_GAP_GROWTH = 0.4;
 
-  const baseStripeRows = Math.max(2, Math.round(sunRowCount * 0.08));
-  if (localRow >= sunRowCount - baseStripeRows) return false;
+const sunSliceBrightness = (localRow: number, sunRowCount: number): number => {
+  const sliceStartRow = sunRowCount * SLICE_START_FRACTION;
+  if (localRow < sliceStartRow) return 1;
+
+  const baseStripeRows = Math.max(2, Math.round(sunRowCount * BASE_STRIPE_FRACTION));
+  if (localRow >= sunRowCount - baseStripeRows) return 1;
 
   const sliceSpan = sunRowCount - sliceStartRow;
   const sliceDepth = (localRow - sliceStartRow) / sliceSpan;
 
-  const bandCount = Math.max(
-    2,
-    Math.round((sliceSpan / 3) * settings.sunSlices),
-  );
+  const bandCount = Math.max(2, Math.round(sliceSpan / settings.sunSliceRows));
   const bandPhase = (sliceDepth * bandCount) % 1;
 
-  // Os cortes engrossam conforme descem, o que sugere o sol afundando.
-  const gapShare =
-    (0.3 + sliceDepth * 0.12) /
-    Math.min(2, Math.max(0.5, settings.sunSlices * 0.7));
+  const gapShare = Math.min(
+    0.85,
+    settings.sunSliceGap * (1 + sliceDepth * SLICE_GAP_GROWTH),
+  );
+  if (bandPhase >= gapShare) return 1;
 
-  return bandPhase < gapShare;
-};
-
-/** Blocos progressivamente mais vazados: o sol clareia de cima para baixo. */
-const pickSunGlyph = (localRow: number, sunRowCount: number): number => {
-  const progress = Math.max(0, Math.min(1, localRow / sunRowCount));
-  if (progress < 0.3) return GLYPH.BLOCK_FULL;
-  if (progress < 0.6) return GLYPH.BLOCK_DARK;
-  if (progress < 0.85) return GLYPH.BLOCK_MEDIUM;
-  return GLYPH.BLOCK_LIGHT;
+  // Trapézio, não senoide: achatado no mínimo por boa parte do vão, suaviza
+  // só nas pontas — para o vão ler como corte mesmo cabendo só 1-2 fileiras.
+  const gapDepth = bandPhase / gapShare;
+  const dip =
+    gapDepth < SLICE_GAP_EDGE_SOFTNESS
+      ? gapDepth / SLICE_GAP_EDGE_SOFTNESS
+      : gapDepth > 1 - SLICE_GAP_EDGE_SOFTNESS
+        ? (1 - gapDepth) / SLICE_GAP_EDGE_SOFTNESS
+        : 1;
+  return 1 - dip * (1 - SLICE_GAP_MIN_BRIGHTNESS);
 };
 
 /**
@@ -148,6 +186,13 @@ export class Sun implements Renderable {
       ? Math.max(0, Math.min(1, (this.direction.y - SET_BELOW) / SET_SPAN))
       : 0;
     const tone = SUN_SHADES[0]!;
+    // Cor da luz em si, separada do topo do disco de propósito: o topo é
+    // amarelo (SUN_SHADES[0]), e amarelo tem o canal verde alto — igual o
+    // ciano da grade. Luz amarela em superfície ciano soma verde nos dois
+    // e sobra verde puro, sem querer. Um tom mais magenta da mesma rampa
+    // reprime o verde e deixa azul+vermelho, que é roxo/rosa contra o ciano
+    // — ainda "a cor do sol", só que uma fatia mais baixa do gradiente.
+    const lightTone = SUN_SHADES[6]!;
 
     // Desligado, o sol não entra na lista: uma luz de intensidade zero
     // custaria o mesmo teste por fragmento para não fazer nada, e ainda
@@ -156,7 +201,7 @@ export class Sun implements Renderable {
       const light = lights.addLight();
       light.kind = LIGHT.DIRECTIONAL;
       copy(light.direction, this.direction);
-      copyRgb(light.color, tone);
+      copyRgb(light.color, lightTone);
       light.intensity = settings.sunLightIntensity * above;
       light.range = Infinity;
       light.castsShadow = true;
@@ -165,6 +210,7 @@ export class Sun implements Renderable {
     const { sky } = lights;
     copy(sky.sunDirection, this.direction);
     copyRgb(sky.sunColor, tone);
+    copyRgb(sky.sunLightColor, lightTone);
     sky.sunRadius = degreesToRadians(settings.sunAngularSize);
     sky.sunIntensity = above;
     sky.intensity = settings.skyReflectionIntensity;
@@ -212,30 +258,53 @@ export class Sun implements Renderable {
         ? Math.round(rasterizer.horizonRow()) - 1
         : rasterizer.lastRow;
 
+    // Zero com a luz desligada, como todo mundo que usa `glyphForDiscEdge` —
+    // a rampa some junto e o glifo volta a ser só a forma medida do disco.
+    const rampWeight = settings.lightingEnabled ? settings.rampWeight : 0;
+    const { rampExposure } = settings;
+    const radiusCols = radiusRows * CELL_ASPECT;
+
     rasterizer.disc(
       this.center,
       radiusRows,
       lastVisibleRow,
-      (col, row, _nx, ny) => {
+      (col, row, nx, ny) => {
         const localRow = ny * radiusRows + radiusRows;
-        if (isSunSliceGap(localRow, sunRowCount)) return;
+        const progress = Math.max(0, Math.min(1, localRow / sunRowCount));
 
-        const progress = localRow / sunRowCount;
+        // O topo estoura mais que a base, e é essa mesma queda — não mais uma
+        // tabela de quatro blocos escolhida a dedo — que `glyphForDiscEdge`
+        // lê como cobertura-alvo: cheio perto do núcleo, esparso na borda.
+        const vertical =
+          SUN_TOP_BRIGHTNESS +
+          (SUN_BOTTOM_BRIGHTNESS - SUN_TOP_BRIGHTNESS) * progress;
+        const brightness = vertical * sunSliceBrightness(localRow, sunRowCount);
+
         const shadeIndex = Math.min(
           SUN_SHADES.length - 1,
           Math.floor(progress * SUN_SHADES.length),
         );
+        const shade = SUN_SHADES[shadeIndex] ?? SUN_SHADES[0]!;
 
-        // O topo estoura mais que a base: é o que dá ao disco o núcleo
-        // branco de sol contra o céu, sem clarear a paleta inteira.
+        const peak = Math.max(1, brightness);
+        scaleRgb(tint, shade, Math.min(1, brightness));
+
         rasterizer.plotCell(
           col,
           row,
-          pickSunGlyph(localRow, sunRowCount),
-          SUN_SHADES[shadeIndex] ?? SUN_SHADES[0]!,
+          glyphForDiscEdge(
+            brightness,
+            nx,
+            ny,
+            radiusCols,
+            radiusRows,
+            rampWeight,
+            rampExposure,
+          ),
+          tint,
           Infinity,
           1,
-          SUN_EMISSIVE * (1 - progress),
+          peak - 1,
         );
       },
     );

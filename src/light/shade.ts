@@ -1,29 +1,22 @@
-import { luminance, type Rgb, rgb, setRgb } from "../math/color";
+import { setRgb } from "../math/color";
 import { copy, set, type Vec3, vec3 } from "../math/vec3";
-import { skyRadiance } from "./sky";
-import { occluded, SHADOW_BIAS, traceNearest } from "./trace";
-import { LIGHT, type Light, type Material } from "./types";
+import { LIGHT, type Light } from "./types";
 import type { LightWorld } from "./world";
 
 /**
- * O kernel de sombreamento: uma superfície, todas as luzes, uma cor.
+ * Helpers de queda de luz, e o tingimento de occluders para reflexo.
  *
- * Roda uma vez por célula de tela ocupada — dezenas de milhares de vezes por
- * quadro. Isso dita a forma do código: nada de alocar, nada de fechar sobre
- * variável, e cada luz sai o mais cedo possível. A resolução é o que torna isto
- * viável: a grade tem 180 colunas, não 1920, então o orçamento por fragmento é
- * cem vezes o de um shader de pixel.
- *
- * A ordem das saídas antecipadas não é arbitrária. Distância antes de ângulo,
- * ângulo antes de raio de sombra: a conta cara é a última, e quase nenhum
- * fragmento chega até ela.
+ * O kernel de sombreamento por fragmento (uma superfície, todas as luzes,
+ * sombra e espelho) não vive mais aqui — rodou na CPU só até a cena passar a
+ * desenhar em `render/gpu/passes/shading.ts` (WGSL), que hoje é a única
+ * implementação. O que sobra neste arquivo é o que ainda roda na CPU: as
+ * contas de direção/queda de luz que `shadeOccluders` usa (uma vez por
+ * quadro, por occluder — não por fragmento) e `ShadeOptions`, o contrato que
+ * `render/shading.ts` e o uniform da GPU compartilham.
  */
 
 /** Quem não é um corpo da cena. O chão, por exemplo. */
 export const NO_OWNER = -1;
-
-/** Até onde um raio de espelho procura antes de desistir e ver o céu. */
-const MIRROR_RANGE = 400;
 
 /**
  * Distância em que uma luz vale metade da sua força.
@@ -65,12 +58,11 @@ export interface ShadeOptions {
 const lightDir: Vec3 = vec3();
 
 /**
- * Direção unitária da superfície até a luz, e a distância até ela.
+ * Direção unitária de um ponto até a luz, e a distância até ela.
  *
- * `-1` quando a luz está fora do alcance — o corte mais barato que existe, e
- * o que quase todo fragmento usa; extraído para ser reaproveitado também por
- * `shadeOccluders`, que não tem uma normal para o `ndotl` mas ainda precisa
- * da mesma queda por distância.
+ * `-1` quando a luz está fora do alcance — o corte mais barato que existe.
+ * Usada por `shadeOccluders`, que não tem uma normal para o `ndotl` mas ainda
+ * precisa da mesma queda por distância.
  */
 const lightDirection = (
   light: Light,
@@ -139,247 +131,13 @@ const lightFalloff = (
   return attenuation;
 };
 
-const reflected: Rgb = rgb();
-
 /**
  * Contribuição abaixo da qual não vale disparar raio de sombra — o mesmo
- * valor em todo lugar que monta um `ShadeOptions` (aqui, `main.ts`,
- * `render/shading.ts`, e o uniform equivalente em `render/gl/passes/shading.ts`),
- * para as quatro cópias nunca discordarem.
+ * valor em todo lugar que monta um `ShadeOptions` ou o uniform equivalente
+ * (`main.ts`, `render/shading.ts`, `render/gpu/presenter.ts`), para as três
+ * cópias nunca discordarem.
  */
 export const SHADOW_THRESHOLD = 0.004;
-
-/**
- * Opções da chamada aninhada de `reflectGround`: sem sombra (custaria um
- * raio extra por reflexo), sem reflexo (trava a recursão em um bounce só,
- * igual ao resto do espelho) e com ambiente ligado — diferente do
- * preenchimento do próprio chão (`Ground`), que desliga ambiente de
- * propósito para não afogar o contraste da grade; aqui não há grade para
- * afogar, só um reflexo que não pode ficar preto longe de luz direta.
- */
-const GROUND_REFLECT_OPTIONS: ShadeOptions = {
-  shadows: false,
-  reflections: false,
-  shadowThreshold: SHADOW_THRESHOLD,
-  maxShadowLights: 0,
-  ambient: true,
-};
-
-/**
- * O que um raio de espelho vê ao acertar o plano do chão (`y = 0`) — a
- * mesma conta de luz de qualquer superfície, num bounce só. `false` se o
- * raio não cruza o chão dentro do alcance do espelho, ou não há chão na
- * cena (`world.groundMaterial` nulo).
- */
-const reflectGround = (
-  world: LightWorld,
-  ox: number,
-  oy: number,
-  oz: number,
-  dx: number,
-  dy: number,
-  dz: number,
-  out: Rgb,
-): boolean => {
-  const material = world.groundMaterial;
-  if (material === null || dy >= 0) return false;
-
-  const t = -oy / dy;
-  if (!(t > SHADOW_BIAS) || t >= MIRROR_RANGE) return false;
-
-  shadeSurface(
-    world,
-    material,
-    ox + dx * t,
-    0,
-    oz + dz * t,
-    0,
-    1,
-    0,
-    -dx,
-    -dy,
-    -dz,
-    NO_OWNER,
-    GROUND_REFLECT_OPTIONS,
-    out,
-  );
-  return true;
-};
-
-export const shadeSurface = (
-  world: LightWorld,
-  material: Material,
-  px: number,
-  py: number,
-  pz: number,
-  normalX: number,
-  normalY: number,
-  normalZ: number,
-  viewX: number,
-  viewY: number,
-  viewZ: number,
-  ownerId: number,
-  options: ShadeOptions,
-  out: Rgb,
-): number => {
-  let nx = normalX;
-  let ny = normalY;
-  let nz = normalZ;
-  let ndotv = nx * viewX + ny * viewY + nz * viewZ;
-
-  // A normal encara quem olha. Uma aresta de wireframe não tem lado de dentro
-  // e de fora, e uma placa vista por trás ficaria preta sem isto.
-  if (ndotv < 0) {
-    nx = -nx;
-    ny = -ny;
-    nz = -nz;
-    ndotv = -ndotv;
-  }
-
-  const { albedo } = material;
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  if (options.ambient) {
-    r = world.ambient.r * albedo.r;
-    g = world.ambient.g * albedo.g;
-    b = world.ambient.b * albedo.b;
-  }
-
-  // O raio de sombra parte um pouco acima da superfície: começar nela mesma
-  // acerta a si próprio no primeiro passo e a cena inteira sai escura.
-  const originX = px + nx * SHADOW_BIAS;
-  const originY = py + ny * SHADOW_BIAS;
-  const originZ = pz + nz * SHADOW_BIAS;
-
-  let shadowRays = 0;
-
-  for (let index = 0; index < world.lightCount; index += 1) {
-    const light = world.light(index);
-
-    const distance = lightDirection(light, px, py, pz, lightDir);
-    if (distance < 0) continue;
-    const lx = lightDir.x;
-    const ly = lightDir.y;
-    const lz = lightDir.z;
-
-    const attenuation = lightFalloff(light, distance, lx, ly, lz);
-    if (attenuation <= 0) continue;
-
-    const ndotl = nx * lx + ny * ly + nz * lz;
-    if (ndotl <= 0) continue;
-
-    const contribution = ndotl * attenuation * light.intensity;
-    if (contribution < options.shadowThreshold) continue;
-
-    if (
-      options.shadows &&
-      light.castsShadow &&
-      shadowRays < options.maxShadowLights
-    ) {
-      shadowRays += 1;
-      if (
-        occluded(
-          world,
-          originX,
-          originY,
-          originZ,
-          lx,
-          ly,
-          lz,
-          distance,
-          ownerId,
-        )
-      ) {
-        continue;
-      }
-    }
-
-    r += albedo.r * light.color.r * contribution;
-    g += albedo.g * light.color.g * contribution;
-    b += albedo.b * light.color.b * contribution;
-
-    // Especular de Blinn-Phong: o meio-vetor entre luz e olho. Barato, e é
-    // a aproximação de "a luz é pequena o bastante para ser um ponto" — que
-    // é verdade para os orbes e mentira só para o sol, que tem o seu
-    // próprio disco no reflexo do céu.
-    if (material.reflectivity > 0) {
-      let hx = lx + viewX;
-      let hy = ly + viewY;
-      let hz = lz + viewZ;
-      const length = Math.sqrt(hx * hx + hy * hy + hz * hz);
-      if (length > 0) {
-        hx /= length;
-        hy /= length;
-        hz /= length;
-
-        const ndoth = nx * hx + ny * hy + nz * hz;
-        if (ndoth > 0) {
-          const specular =
-            Math.pow(ndoth, material.gloss) *
-            material.reflectivity *
-            attenuation *
-            light.intensity;
-          r += light.color.r * specular;
-          g += light.color.g * specular;
-          b += light.color.b * specular;
-        }
-      }
-    }
-  }
-
-  if (options.reflections && material.reflectivity > 0) {
-    // Espelhamento do olhar em torno da normal.
-    const twice = 2 * ndotv;
-    const rx = nx * twice - viewX;
-    const ry = ny * twice - viewY;
-    const rz = nz * twice - viewZ;
-
-    const hit = material.mirror
-      ? traceNearest(
-          world,
-          originX,
-          originY,
-          originZ,
-          rx,
-          ry,
-          rz,
-          MIRROR_RANGE,
-          ownerId,
-        )
-      : null;
-
-    if (hit !== null) {
-      // Um bounce: o que o espelho mostra do corpo é a cor dele, já
-      // considerando a luz que bate nele (`shadeOccluders`) — não uma
-      // segunda rodada de iluminação aqui. Recursão aqui multiplicaria o
-      // custo por fragmento e o ganho seria espelho dentro de espelho.
-      setRgb(reflected, hit.tint.r, hit.tint.g, hit.tint.b);
-    } else if (
-      !(
-        material.mirror &&
-        reflectGround(world, originX, originY, originZ, rx, ry, rz, reflected)
-      )
-    ) {
-      skyRadiance(world.sky, rx, ry, rz, material.gloss, reflected);
-    }
-
-    const amount = material.reflectivity;
-    r += reflected.r * amount;
-    g += reflected.g * amount;
-    b += reflected.b * amount;
-  }
-
-  const emission = material.emissiveStrength;
-  if (emission > 0) {
-    r += material.emissive.r * emission;
-    g += material.emissive.g * emission;
-    b += material.emissive.b * emission;
-  }
-
-  setRgb(out, r, g, b);
-  return luminance(out);
-};
 
 /**
  * Preenche `Occluder.tint` de todo corpo com material, a partir da luz que

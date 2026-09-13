@@ -2,11 +2,9 @@ import type { LightWorld } from "../../light/world";
 
 /**
  * `LightWorld` para o compute shader: um `storage buffer` por pool, array de
- * structs — não a textura row-major que o backend WebGL2 precisava (ver
- * `render/gl/light-upload.ts`). Cada struct WGSL é só `vec4f`s, para nunca
- * discutir regra de alinhamento: um campo de três componentes ocupa a mesma
- * fileira de um de quatro, e o quarto vira folga ou carrega o próximo escalar
- * solto — o mesmo truque que o array `Float32Array` já usava, só que agora
+ * structs. Cada struct WGSL é só `vec4f`s, para nunca discutir regra de
+ * alinhamento: um campo de três componentes ocupa a mesma fileira de um de
+ * quatro, e o quarto vira folga ou carrega o próximo escalar solto —
  * `array[i]` é literalmente o item `i`, sem transpor linha/coluna.
  */
 
@@ -63,6 +61,8 @@ export interface SkyUniformValues {
   sunGlow: number;
   horizonGlow: number;
   sunSpread: number;
+  /** Raio angular do disco, em radianos — o que um raio de espelho precisa para saber se acertou o sol. */
+  sunRadius: number;
   hasGround: boolean;
   groundAlbedoR: number;
   groundAlbedoG: number;
@@ -102,6 +102,7 @@ export class LightUpload {
     sunGlow: 1,
     horizonGlow: 1,
     sunSpread: 1,
+    sunRadius: 0,
     hasGround: false,
     groundAlbedoR: 0,
     groundAlbedoG: 0,
@@ -156,6 +157,7 @@ export class LightUpload {
       sunGlow: sky.sunGlow,
       horizonGlow: sky.horizonGlow,
       sunSpread: sky.sunSpread,
+      sunRadius: sky.sunRadius,
     });
 
     const ground = world.groundMaterial;

@@ -1,9 +1,7 @@
 /**
- * Textura com vista, para renderizar fora da tela — a contraparte WebGPU de
- * `render/gl/target.ts`. `rgba16float`: meia precisão, para o que o
- * sombreamento passa de 1.0 sobreviver até o bloom (é o mesmo motivo do
- * `hdr` do backend WebGL2, só que aqui não há alternativa de 8 bits — todo
- * dispositivo WebGPU renderiza em `rgba16float` sem extensão).
+ * Textura com vista, para renderizar fora da tela. `rgba16float`: meia
+ * precisão, para o que o sombreamento passa de 1.0 sobreviver até o bloom —
+ * todo dispositivo WebGPU renderiza em `rgba16float` sem extensão.
  */
 export class RenderTarget {
   texture: GPUTexture;

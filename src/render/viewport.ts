@@ -4,8 +4,11 @@
  * Diferente da versão em DOM, aqui a métrica da fonte do sistema não manda em
  * nada: o atlas é nosso, então escolhemos a proporção da célula. O grid mira
  * MAX_COLS colunas e a célula cresce em telas grandes, em vez de o número de
- * células explodir — o custo por quadro fica previsível e o pixelado grosso é
- * mais fiel ao retrô.
+ * células explodir — o pixelado grosso é mais fiel ao retrô. `cellScale`
+ * (`settings.renderScale`) multiplica os dois tetos: é o que decide quantos
+ * caracteres cabem na tela, então mexe direto no custo de CPU por quadro (ver
+ * README, "Custo") — não é um multiplicador de pixel do backing store, esse
+ * é só `dpr`.
  */
 
 export const MAX_COLS = 180;
@@ -38,11 +41,12 @@ export const computeViewport = (
   availableWidth: number,
   availableHeight: number,
   dpr: number,
+  cellScale: number,
 ): Viewport => {
   // A célula é grande o bastante para respeitar os dois tetos ao mesmo tempo.
   const cellWidth = Math.max(
-    availableWidth / MAX_COLS,
-    availableHeight / (MAX_ROWS * CELL_ASPECT),
+    availableWidth / (MAX_COLS * cellScale),
+    availableHeight / (MAX_ROWS * cellScale * CELL_ASPECT),
   );
   const cellHeight = cellWidth * CELL_ASPECT;
 
