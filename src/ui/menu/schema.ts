@@ -1,4 +1,4 @@
-import {FONT, type Settings, settings} from "../../config";
+import {FONT, saveSettings, type Settings, settings} from "../../config";
 import type {EntityField, EntityState} from "../../scene/entities/entity";
 import {TEXTURES} from "../../render/ramp";
 import {ENTITY_KINDS, ENTITY_ORDER, type World} from "../../scene/world";
@@ -45,6 +45,7 @@ const slider = (spec: SliderSpec): MenuItem => ({
   get: () => settings[spec.key],
   set: (value) => {
     settings[spec.key] = value;
+    saveSettings();
   },
 });
 
@@ -54,6 +55,7 @@ const toggle = (key: BooleanKey, label: string): MenuItem => ({
   get: () => settings[key],
   set: (value) => {
     settings[key] = value;
+    saveSettings();
   },
 });
 
@@ -68,7 +70,32 @@ const FONT_LABELS: Record<string, string> = {
   [FONT.OLDSCHOOL]: "Oldschool",
 };
 
-export const buildGroups = (world: World): MenuGroup[] => [
+/**
+ * Uma linha em branco antes de cada `heading` que não é o primeiro item da
+ * lista — dá respiro visual entre subseções (ex.: "Sun", "Sun Wash", "Stars &
+ * Reflection" dentro do grupo "Sky") sem exigir que quem escreve um grupo
+ * novo lembre de inserir o espaço à mão. Não mexe no espaçamento *entre*
+ * grupos (a coluna da esquerda, `drawGroups`) — cada grupo já é uma seção
+ * clara ali, o problema era só dentro de uma lista de itens longa.
+ */
+const withHeadingSpacing = (items: readonly MenuItem[]): MenuItem[] => {
+  const result: MenuItem[] = [];
+  for (const item of items) {
+    if (item.kind === "heading" && result.length > 0) {
+      result.push({ kind: "spacer" });
+    }
+    result.push(item);
+  }
+  return result;
+};
+
+export const buildGroups = (world: World): MenuGroup[] =>
+  rawGroups(world).map((group) => ({
+    label: group.label,
+    items: () => withHeadingSpacing(group.items()),
+  }));
+
+const rawGroups = (world: World): MenuGroup[] => [
   {
     label: "Camera",
     items: () => [
@@ -136,6 +163,7 @@ export const buildGroups = (world: World): MenuGroup[] => [
         get: () => settings.gridTexture,
         set: (value) => {
           settings.gridTexture = value as Settings["gridTexture"];
+          saveSettings();
         },
       },
       slider({
@@ -298,6 +326,7 @@ export const buildGroups = (world: World): MenuGroup[] => [
         get: () => settings.fontFamily,
         set: (value) => {
           settings.fontFamily = value as Settings["fontFamily"];
+          saveSettings();
         },
       },
       slider({

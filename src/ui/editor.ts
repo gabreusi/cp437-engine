@@ -14,13 +14,7 @@ import {
   computePanelLayout,
   drawPanel,
 } from "./menu/draw";
-import {
-  type MenuItem,
-  adjustItem,
-  choiceArrowDirection,
-  isFocusable,
-  sliderRatioValue,
-} from "./menu/model";
+import { ItemList } from "./menu/item-list";
 import { buildEntityItems } from "./menu/schema";
 
 /**
@@ -49,11 +43,11 @@ export class Editor {
   /** O modo de edição está ligado. Quem desenha a seleção consulta isto. */
   active = false;
 
-  private items: MenuItem[] = [];
+  private readonly itemList = new ItemList();
   private layout: MenuLayout | null = null;
-  private scroll = 0;
-  private hoverItem = -1;
-  private draggingSlider = -1;
+  /** Foco reinicia quando a seleção muda — não faz sentido herdar o índice
+   * de um objeto para outro com campos diferentes. */
+  private lastSelectedId: number | null = null;
 
   constructor(
     private readonly world: World,
@@ -109,28 +103,27 @@ export class Editor {
     if (!this.active) return;
 
     const selected = this.world.selected;
-    this.items =
-      selected === null ? [] : buildEntityItems(this.world, selected);
+    const items = selected === null ? [] : buildEntityItems(this.world, selected);
+    this.itemList.setItems(items);
+    if ((selected?.id ?? null) !== this.lastSelectedId) {
+      this.lastSelectedId = selected?.id ?? null;
+      this.itemList.resetFocus();
+    }
     this.layout =
-      this.items.length === 0
-        ? null
-        : computePanelLayout(viewport, this.items.length);
+      items.length === 0 ? null : computePanelLayout(viewport, items.length);
     this.manipulator.update(selected, camera, rasterizer);
 
     if (!events.down) {
-      this.draggingSlider = -1;
+      this.itemList.release();
       this.manipulator.release();
     }
 
     const layout = this.layout;
+    if (layout !== null) this.itemList.clampFocus(layout.visibleRows);
 
     // Um slider agarrado continua respondendo à coluna do cursor sozinha,
     // não importa a linha — mesma correção do menu de pausa, mesmo widget.
-    if (this.draggingSlider >= 0 && events.down && layout !== null) {
-      const item = this.items[this.draggingSlider];
-      if (item !== undefined && item.kind === "slider") {
-        item.set(sliderRatioValue(item, this.exactCol, layout.trackCol, layout.trackWidth));
-      }
+    if (events.down && layout !== null && this.itemList.continueDrag(this.exactCol, layout)) {
       return;
     }
 
@@ -147,7 +140,7 @@ export class Editor {
       return;
     }
 
-    this.hoverItem = -1;
+    this.itemList.hoverItem = -1;
     this.handleScene(events, viewport, camera, rasterizer, lights);
   }
 
@@ -163,82 +156,25 @@ export class Editor {
     if (active && viewport !== undefined) this.cursor.center(viewport);
 
     if (!active) {
-      this.draggingSlider = -1;
-      this.hoverItem = -1;
+      this.itemList.release();
+      this.itemList.hoverItem = -1;
       this.manipulator.release();
     }
   }
 
   /** Cursor sobre o painel lateral: os mesmos widgets do menu, no clique. */
   private handlePanel(events: UiEvents, layout: MenuLayout): void {
-    const index = this.scroll + (this.row - layout.itemFirstRow);
-    const item = this.items[index];
-    this.hoverItem = item !== undefined && isFocusable(item) ? index : -1;
-
-    if (events.wheel !== 0) {
-      const maxScroll = Math.max(0, this.items.length - layout.visibleRows);
-      this.scroll = clamp(this.scroll + events.wheel, 0, maxScroll);
-      return;
-    }
-
-    if (item === undefined || !isFocusable(item)) return;
-
-    const onTrack = item.kind === "slider" && this.col >= layout.trackCol - 1;
-
-    if (events.pressed) {
-      const choiceDir = choiceArrowDirection(
-        item,
-        this.col,
-        layout.trackCol,
-        layout.trackWidth,
-      );
-
-      if (choiceDir !== 0) {
-        adjustItem(item, choiceDir);
-      } else if (onTrack) {
-        this.draggingSlider = index;
-        // Clicar num ponto da trilha significa "vá para cá", sem exigir
-        // arrasto: é a mesma regra do menu, e vale porque é o mesmo widget.
-        // A continuação do arrasto é tratada em `update`, coluna a coluna.
-        item.set(
-          sliderRatioValue(item, this.exactCol, layout.trackCol, layout.trackWidth),
-        );
-      } else if (item.kind !== "slider") {
-        this.activate(item);
-      }
-    }
+    this.itemList.handlePointer(events, layout, this.col, this.exactCol, this.row);
   }
 
   /**
-   * As setas ajustam o item sob o cursor, sem exigir arrasto — a mesma
-   * `adjustItem` que o menu de pausa usa nas suas, ver `model.ts`. Faltava
-   * aqui: o painel do editor só respondia ao clique na trilha, e ela é larga
-   * demais em cliques (poucas colunas) para posicionar um objeto com cuidado.
+   * Teclado com o painel aberto: seta cima/baixo move o foco, esquerda/direita
+   * ajusta, Enter/Espaço ativa — o mesmo `ItemList` do menu de pausa, sem
+   * grupo nenhum para devolver o foco.
    */
   private handlePanelKeys(events: UiEvents): void {
-    const item = this.items[this.hoverItem];
-    if (item === undefined) return;
-
     for (const code of events.keys) {
-      if (code === "ArrowLeft") adjustItem(item, -1, events.shift);
-      if (code === "ArrowRight") adjustItem(item, 1, events.shift);
-    }
-  }
-
-  private activate(item: MenuItem): void {
-    switch (item.kind) {
-      case "toggle":
-        item.set(!item.get());
-        return;
-      case "choice":
-        adjustItem(item, 1);
-        return;
-      case "action":
-        item.run();
-        return;
-      case "entity":
-        item.select();
-        return;
+      this.itemList.handleKeyCode(code, events.shift);
     }
   }
 
@@ -259,7 +195,8 @@ export class Editor {
         this.exactCol,
         this.exactRow,
       );
-      this.scroll = 0;
+      // A troca de seleção reinicia o foco/rolagem sozinha, no próximo
+      // `update()`, ao notar que `lastSelectedId` mudou.
       return;
     }
 
@@ -300,9 +237,10 @@ export class Editor {
       drawPanel(
         framebuffer,
         this.layout,
-        this.items,
-        this.scroll,
-        this.hoverItem,
+        this.itemList.current,
+        this.itemList.itemIndex,
+        this.itemList.scroll,
+        this.itemList.hoverItem,
       );
     }
 
@@ -315,6 +253,3 @@ export class Editor {
     );
   }
 }
-
-const clamp = (value: number, min: number, max: number): number =>
-  Math.max(min, Math.min(max, value));

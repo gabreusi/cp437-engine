@@ -1,6 +1,6 @@
 import "./styles/index.css";
 
-import { degreesToRadians, settings } from "./config";
+import { degreesToRadians, loadSettings, settings } from "./config";
 import { requireElement } from "./dom";
 import { FreeCam } from "./core/freecam";
 import { GameLoop } from "./core/loop";
@@ -31,6 +31,10 @@ import { Manipulator } from "./ui/manipulator";
 import { Menu } from "./ui/menu/menu";
 import { buildGroups } from "./ui/menu/schema";
 import { Ground } from "./scene/ground";
+
+// Antes de qualquer leitura de `settings` — `syncViewport` já lê
+// `renderScale` na primeira chamada.
+loadSettings();
 
 const canvas = requireElement<HTMLCanvasElement>("canvas");
 const presenter = new GpuPresenter(canvas);
@@ -127,6 +131,9 @@ const atmosphere = {
   sunSpread: 1,
   washSize: 1,
   washIntensity: 1,
+  sunColorR: 1,
+  sunColorG: 1,
+  sunColorB: 1,
 };
 const sunDir = { x: 0, y: 0, z: -1 };
 const sunScreen = createProjected();
@@ -201,6 +208,11 @@ const updateAtmosphere = (currentViewport: Viewport): void => {
   atmosphere.sunGlow = lights.sky.sunGlow;
   atmosphere.horizonGlow = lights.sky.horizonGlow;
   atmosphere.sunSpread = lights.sky.sunSpread;
+  // Mesma cor que tinge a linha do horizonte (`Sky.drawHorizon`) — o ground
+  // haze pintado no fundo passa a acompanhar o sol com ela.
+  atmosphere.sunColorR = lights.sky.sunLightColor.r;
+  atmosphere.sunColorG = lights.sky.sunLightColor.g;
+  atmosphere.sunColorB = lights.sky.sunLightColor.b;
   // Tamanho/força do roxo são preferência de tela, não física do sol — como
   // `groundHaze` logo abaixo, vêm direto de `settings`.
   atmosphere.washSize = settings.sunWashSize;

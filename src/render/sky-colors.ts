@@ -36,7 +36,13 @@ export const SKY_WEIGHT = {
   BAND: 0.1,
 } as const;
 
-const glsl = (name: string, c: { r: number; g: number; b: number }): string =>
+/**
+ * Uma cor nomeada como declaração GLSL. Exportado e não só de uso interno:
+ * `palette.ts` usa o mesmo conversor para `GRID_GLSL`, pelo mesmo motivo de
+ * `SKY_GLSL` — uma cor usada tanto pela CPU quanto por um shader não pode
+ * ter uma segunda cópia hand-typed do lado do WGSL.
+ */
+export const glsl = (name: string, c: { r: number; g: number; b: number }): string =>
   `const vec3 ${name} = vec3(${c.r.toFixed(3)}, ${c.g.toFixed(3)}, ${c.b.toFixed(3)});`;
 
 /** As mesmas constantes como declarações GLSL, para injetar no shader. */

@@ -63,8 +63,24 @@ export interface HeadingItem {
   label: string;
 }
 
+/**
+ * Uma linha em branco. Não recebe foco, não desenha nada — só dá respiro
+ * vertical antes de um `heading` no meio de uma lista (`withHeadingSpacing`,
+ * `schema.ts`), sem quebrar a correspondência 1:1 entre índice de item e
+ * linha de tela que todo o resto (rolagem, clique, teclado) já assume.
+ */
+export interface SpacerItem {
+  kind: "spacer";
+}
+
 export type MenuItem =
-  SliderItem | ToggleItem | ChoiceItem | ActionItem | EntityItem | HeadingItem;
+  | SliderItem
+  | ToggleItem
+  | ChoiceItem
+  | ActionItem
+  | EntityItem
+  | HeadingItem
+  | SpacerItem;
 
 export interface MenuGroup {
   label: string;
@@ -76,7 +92,8 @@ export interface MenuGroup {
   items(): MenuItem[];
 }
 
-export const isFocusable = (item: MenuItem): boolean => item.kind !== "heading";
+export const isFocusable = (item: MenuItem): boolean =>
+  item.kind !== "heading" && item.kind !== "spacer";
 
 /** Passo maior com Shift: atravessar um slider de ponta a ponta na mão cansa. */
 export const FAST_STEP = 8;

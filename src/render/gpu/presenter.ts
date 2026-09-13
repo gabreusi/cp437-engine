@@ -204,6 +204,7 @@ export class GpuPresenter implements Presenter {
         sunSliceGap: settings.sunSliceGap,
         sunWashSize: settings.sunWashSize,
         sunWashIntensity: settings.sunWashEnabled ? settings.sunWashIntensity : 0,
+        gridSize: settings.gridSize,
       },
     );
   }

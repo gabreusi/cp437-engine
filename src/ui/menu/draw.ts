@@ -1,3 +1,4 @@
+import {settings} from "../../config";
 import {fromHex, type Rgb} from "../../math/color";
 import type {Framebuffer} from "../../render/framebuffer";
 import {COLOR, GLYPH} from "../../render/palette";
@@ -42,6 +43,8 @@ export const PANEL_WIDTH = 36;
 
 const MAX_WIDTH = 76;
 const MAX_HEIGHT = 34;
+const MIN_WIDTH = 30;
+const MIN_HEIGHT = 12;
 const GROUP_WIDTH = 16;
 const LABEL_WIDTH = 17;
 const VALUE_WIDTH = 8;
@@ -70,8 +73,15 @@ export interface MenuLayout {
  * linha acima do que mostra.
  */
 export const computeLayout = (viewport: Viewport): MenuLayout => {
-  const width = Math.min(MAX_WIDTH, Math.max(30, viewport.colCount - 4));
-  const height = Math.min(MAX_HEIGHT, Math.max(12, viewport.rowCount - 2));
+  // Compensa o encolhimento de célula do Render Scale: mais colunas cabendo
+  // na mesma janela física fariam a caixa do menu, em pixels, encolher junto
+  // — escalar os tetos pelo mesmo fator mantém a área física ~constante.
+  // Nunca abaixo do piso, para a lista de grupos não perder itens em escala
+  // baixa (ver `MIN_HEIGHT`).
+  const maxWidth = Math.max(MIN_WIDTH, Math.round(MAX_WIDTH * settings.renderScale));
+  const maxHeight = Math.max(MIN_HEIGHT, Math.round(MAX_HEIGHT * settings.renderScale));
+  const width = Math.min(maxWidth, Math.max(MIN_WIDTH, viewport.colCount - 4));
+  const height = Math.min(maxHeight, Math.max(MIN_HEIGHT, viewport.rowCount - 2));
   const col = Math.floor((viewport.colCount - width) / 2);
   const row = Math.floor((viewport.rowCount - height) / 2);
 
@@ -109,14 +119,20 @@ export const computePanelLayout = (
   viewport: Viewport,
   itemCount: number,
 ): MenuLayout => {
-  const width = Math.min(PANEL_WIDTH, Math.max(24, viewport.colCount - 2));
+  // Mesma compensação de `computeLayout`: sem ela, o painel também encolhia
+  // fisicamente ao subir o Render Scale.
+  const maxWidth = Math.max(24, Math.round(PANEL_WIDTH * settings.renderScale));
+  const width = Math.min(maxWidth, Math.max(24, viewport.colCount - 2));
   // Título, moldura e uma linha de folga; o resto é lista.
   const height = Math.min(viewport.rowCount - 2, itemCount + 4);
   const col = viewport.colCount - width - 1;
   const row = 1;
 
   const itemCol = col + 2;
-  const itemWidth = width - 3;
+  // -4 e não -3: a mesma folga de uma coluna antes da borda que o menu de
+  // pausa usa, para a seta de rolagem (`drawItems`, `itemCol + itemWidth`)
+  // não cair em cima do próprio traço da moldura.
+  const itemWidth = width - 4;
 
   return {
     col,
@@ -134,10 +150,16 @@ export const computePanelLayout = (
   };
 };
 
+/**
+ * O painel lateral: mesma lista de itens do menu de pausa, com foco por
+ * teclado sempre visível — não há coluna de grupos disputando o teclado, ao
+ * contrário do menu, então o item focado é sempre o realce certo.
+ */
 export const drawPanel = (
   framebuffer: Framebuffer,
   layout: MenuLayout,
   items: readonly MenuItem[],
+  itemIndex: number,
   scroll: number,
   hoverItem: number,
 ): void => {
@@ -155,36 +177,13 @@ export const drawPanel = (
   );
   drawBox(framebuffer, col, row, width, height, MENU_COLORS.BORDER);
 
-  const end = Math.min(items.length, scroll + layout.visibleRows);
-  for (let index = scroll; index < end; index += 1) {
-    drawItem(
-      framebuffer,
-      layout,
-      items[index]!,
-      layout.itemFirstRow + (index - scroll),
-      false,
-      index === hoverItem,
-    );
-  }
-
-  if (scroll > 0) {
-    plot(
-      framebuffer,
-      col + width - 2,
-      layout.itemFirstRow,
-      GLYPH.ARROW_UP,
-      MENU_COLORS.DIM,
-    );
-  }
-  if (end < items.length) {
-    plot(
-      framebuffer,
-      col + width - 2,
-      layout.itemFirstRow + layout.visibleRows - 1,
-      GLYPH.ARROW_DOWN,
-      MENU_COLORS.DIM,
-    );
-  }
+  drawItems(framebuffer, layout, {
+    items,
+    itemIndex,
+    scroll,
+    hoverItem,
+    focusRing: true,
+  });
 };
 
 const plot = (
@@ -195,6 +194,22 @@ const plot = (
   color: Rgb,
   emissive = 0,
 ): void => framebuffer.plot(col, row, glyph, color, OVERLAY_DEPTH, 1, emissive);
+
+/**
+ * O que `drawItems` precisa para desenhar a lista de itens sozinha — o mesmo
+ * formato usado pelo menu de pausa (dentro de `DrawState`) e pelo painel
+ * lateral do editor (`drawPanel`), para os dois desenharem a lista com a
+ * mesma função, e não duas quase iguais.
+ */
+export interface ItemsState {
+  items: readonly MenuItem[];
+  itemIndex: number;
+  scroll: number;
+  hoverItem: number;
+  /** Mostra o item focado com seta e realce. Falso quando o teclado está
+   * atendendo outra coisa (grupos do menu de pausa). */
+  focusRing: boolean;
+}
 
 export interface DrawState {
   groups: readonly MenuGroup[];
@@ -251,7 +266,13 @@ export const drawMenu = (
   );
 
   drawGroups(framebuffer, layout, state);
-  drawItems(framebuffer, layout, state);
+  drawItems(framebuffer, layout, {
+    items: state.items,
+    itemIndex: state.itemIndex,
+    scroll: state.scroll,
+    hoverItem: state.hoverItem,
+    focusRing: !state.onGroups,
+  });
 
   const hint = state.onGroups
     ? "▲▼ group   ► select   Esc close"
@@ -289,19 +310,18 @@ const drawGroups = (
   }
 };
 
-const drawItems = (
+export const drawItems = (
   framebuffer: Framebuffer,
   layout: MenuLayout,
-  state: DrawState,
+  state: ItemsState,
 ): void => {
   const end = Math.min(state.items.length, state.scroll + layout.visibleRows);
 
   for (let index = state.scroll; index < end; index += 1) {
     const item = state.items[index]!;
     const y = layout.itemFirstRow + (index - state.scroll);
-    const focused = index === state.itemIndex && !state.onGroups;
+    const focused = index === state.itemIndex && state.focusRing;
     const hovered = index === state.hoverItem;
-
 
     drawItem(framebuffer, layout, item, y, focused, hovered);
   }
@@ -349,6 +369,8 @@ export const drawItem = (
     );
     return;
   }
+
+  if (item.kind === "spacer") return;
 
   const labelColor = focused
     ? MENU_COLORS.FOCUS

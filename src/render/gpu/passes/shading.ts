@@ -2,6 +2,7 @@ import type {Framebuffer} from "../../framebuffer";
 import type {LightWorld} from "../../../light/world";
 import {LIGHT_STRUCT_WGSL, LightUpload, OCCLUDER_STRUCT_WGSL, STAR_STRUCT_WGSL,} from "../light-upload";
 import {SKY_GLSL, toWgslConstants} from "../../sky-colors";
+import {GRID_GLSL} from "../../palette";
 
 /**
  * O kernel de luz (sombra e espelho vêm de `light/trace.ts`; o modelo de céu
@@ -28,7 +29,7 @@ ${STAR_STRUCT_WGSL}
 
 struct Uniforms {
   ambient: vec4f,         // r,g,b,_
-  cameraPos: vec4f,       // x,y,z,_
+  cameraPos: vec4f,       // x,y,z, gridSize
   sunDir: vec4f,          // x,y,z,_
   sunColor: vec4f,        // r,g,b,_
   skyParams: vec4f,       // sunIntensity, skyIntensity, sunGlow, horizonGlow
@@ -87,6 +88,11 @@ const MIN_LOBE = 1.0;
 const STAR_REFLECT_COS_THRESHOLD = 0.9997;
 const STAR_REFLECT_STRENGTH = 0.6;
 
+// Mesmo peso de Sky.drawHorizon (scene/sky.ts, HORIZON_TINT_WEIGHT).
+const HORIZON_TINT_WEIGHT = 0.85;
+// Meia-largura angular da linha do horizonte, em dir.y. Calibrado a olho.
+const HORIZON_LINE_WIDTH = 0.012;
+
 const CONTRAST_EXPONENT = 1.6;
 const JITTER_CELL = 0.5;
 const IRREGULAR_JITTER = 0.34;
@@ -98,6 +104,10 @@ const AREA_LUT_LEVELS = 256.0;
 // segunda cópia hand-typed: declara VOID_COLOR, PINK, CYAN, PURPLE, HAZE,
 // WASH_WEIGHT, GLOW_WEIGHT, BAND_WEIGHT.
 ${toWgslConstants(SKY_GLSL)}
+
+// Mesma fonte que render/palette.ts::COLOR (GRID_NEAR/MID/FAR), para
+// reflectGround bandear por distância sem uma segunda cópia da cor.
+${toWgslConstants(GRID_GLSL)}
 
 // ---------------------------------------------------------------------------
 // Ruído (math/noise.ts).
@@ -138,6 +148,14 @@ fn jitterAt(p: vec3f) -> f32 {
 // As três camadas do meio são luz do sol espalhada, e é o sol (scene/sun.ts)
 // quem diz o quanto: sunGlow, horizonGlow e sunSpread chegam prontos no
 // modelo de céu. Só o vazio é constante — ele não é luz de ninguém.
+//
+// A linha do horizonte (Sky.drawHorizon, scene/sky.ts) entra aqui também,
+// como uma faixa fina centrada em dir.y == 0 — pura direção, sem paralaxe
+// (mesmo invariante do céu inteiro), então vale para qualquer raio de
+// reflexo, não só a visão direta. A cor usa u.sunColor (o disco, sempre
+// disponível aqui) em vez de sunLightColor (a cor de verdade da luz, que
+// Sky.drawHorizon usa mas não chega a este shader) — aproxima o mesmo
+// aquecimento perto do poente sem crescer o uniform só por isto.
 // ---------------------------------------------------------------------------
 fn skyRadiance(dir: vec3f, gloss: f32) -> vec3f {
   let sunDir = u.sunDir.xyz;
@@ -194,6 +212,11 @@ fn skyRadiance(dir: vec3f, gloss: f32) -> vec3f {
     let ground = min(1.0, -dir.y * 4.0);
     c += (HAZE * 0.25 - c) * ground;
   }
+
+  let horizonLineGlow = min(1.0, horizon) * HORIZON_TINT_WEIGHT;
+  let horizonLineColor = mix(HORIZON, u.sunColor.xyz, horizonLineGlow);
+  let horizonLine = 1.0 - smoothstep(0.0, HORIZON_LINE_WIDTH, abs(dir.y));
+  c += (horizonLineColor - c) * horizonLine;
 
   return c * skyIntensity;
 }
@@ -588,6 +611,36 @@ fn shadeCore(
   return color;
 }
 
+// Fim das bandas da grade real (groundBand, render/shading.ts), em
+// unidades de mundo ao longo do raio de reflexo — não em fogAmount, que
+// depende de viewDistance/fogDensity, uniforms que não chegam a este
+// shader só para um bounce de reflexo. Valores calibrados a olho para bater
+// perto do ajuste padrão (300/0.6): um espelho tem que mostrar a mesma
+// variação por distância que o chão de verdade, não a cor exata dele.
+const GROUND_BAND_NEAR_T = 110.0;
+const GROUND_BAND_FAR_T = 220.0;
+
+fn groundBandColor(t: f32) -> vec3f {
+  let toMid = smoothstep(0.0, GROUND_BAND_NEAR_T, t);
+  let toFar = smoothstep(GROUND_BAND_NEAR_T, GROUND_BAND_FAR_T, t);
+  return mix(mix(GRID_NEAR, GRID_MID, toMid), GRID_FAR, toFar);
+}
+
+// Meia-largura da linha, em fração de gridSize. Calibrado a olho.
+const GROUND_LINE_FRACTION = 0.05;
+
+// 1 em cima de uma linha da grade real (múltiplo de gridSize em X ou Z),
+// suavizando para 0 no vão — mesma grade ancorada em posição de mundo que
+// Ground.render desenha de verdade (baseX/baseZ só escolhem por onde ela
+// começa a ser emitida, as linhas em si estão em todo múltiplo de
+// gridSize), então um espelho mostra o mesmo padrão, não uma cor lisa.
+fn groundLineMask(worldX: f32, worldZ: f32, gridSize: f32) -> f32 {
+  let half = gridSize * GROUND_LINE_FRACTION;
+  let dx = abs(fract(worldX / gridSize + 0.5) - 0.5) * gridSize;
+  let dz = abs(fract(worldZ / gridSize + 0.5) - 0.5) * gridSize;
+  return 1.0 - smoothstep(0.0, half, min(dx, dz));
+}
+
 fn reflectGround(origin: vec3f, dir: vec3f) -> vec4f {
   // .a > 0.5 sinaliza acerto — WGSL não tem saída "out bool" barata aqui.
   if (u.skyParams2.z < 0.5 || dir.y >= 0.0) { return vec4f(0.0); }
@@ -595,10 +648,16 @@ fn reflectGround(origin: vec3f, dir: vec3f) -> vec4f {
   if (!(t > SHADOW_BIAS) || t >= MIRROR_RANGE) { return vec4f(0.0); }
 
   let hitPos = vec3f(origin.x + dir.x * t, 0.0, origin.z + dir.z * t);
+  let gridSize = max(0.1, u.cameraPos.w);
+  let line = groundLineMask(hitPos.x, hitPos.z, gridSize);
+  let albedo = groundBandColor(t);
+  // A linha é neon (emite na própria cor), o vão só reflete — mesma
+  // distinção de createGroundPen (render/shading.ts).
+  let emissive = albedo * u.groundEmissive.w * line;
   let view = -dir;
   let shaded = shadeCore(
     hitPos, vec3f(0.0, 1.0, 0.0), view,
-    u.groundAlbedo.xyz, u.groundEmissive.xyz, u.groundEmissive.w,
+    albedo, emissive, 1.0,
     0.0, u.groundGloss.x,
     true, false, -1.0
   );
@@ -1128,6 +1187,7 @@ export class ShadingPass {
       sunSliceGap: number;
       sunWashSize: number;
       sunWashIntensity: number;
+      gridSize: number;
     },
   ): void {
     if (this.pipeline === null || this.bindGroup === null) return;
@@ -1179,13 +1239,14 @@ export class ShadingPass {
       sunSliceGap: number;
       sunWashSize: number;
       sunWashIntensity: number;
+      gridSize: number;
     },
   ): void {
     const d = this.uniformData;
     const { sky } = this.lights;
     let o = 0;
     d[o++] = this.lights.ambientR; d[o++] = this.lights.ambientG; d[o++] = this.lights.ambientB; d[o++] = 0;
-    d[o++] = cameraX; d[o++] = cameraY; d[o++] = cameraZ; d[o++] = 0;
+    d[o++] = cameraX; d[o++] = cameraY; d[o++] = cameraZ; d[o++] = options.gridSize;
     d[o++] = sky.sunDirX; d[o++] = sky.sunDirY; d[o++] = sky.sunDirZ; d[o++] = 0;
     d[o++] = sky.sunColorR; d[o++] = sky.sunColorG; d[o++] = sky.sunColorB; d[o++] = 0;
     d[o++] = sky.sunIntensity; d[o++] = sky.intensity; d[o++] = sky.sunGlow; d[o++] = sky.horizonGlow;

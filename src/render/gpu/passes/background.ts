@@ -15,6 +15,10 @@ export interface Atmosphere {
   /** Alcance do roxo em volta do sol, relativo ao padrão. Zero de `washIntensity` desliga a camada. */
   washSize: number;
   washIntensity: number;
+  /** Cor de verdade da luz do sol (`SkyModel.sunLightColor`) — tinge o ground haze. */
+  sunColorR: number;
+  sunColorG: number;
+  sunColorB: number;
 }
 
 const fragmentSource = (): string => `
@@ -32,7 +36,10 @@ struct Params {
   sunSpread: f32,
   washSize: f32,
   washIntensity: f32,
-  _pad: vec3f,
+  // Cor real do sol (SkyModel.sunLightColor) — mesmo slot que era _pad: o
+  // alinhamento de vec3f já reservava esses 12 bytes de folga sozinho, então
+  // não precisou crescer o buffer para o ground haze passar a ver o sol.
+  sunColor: vec3f,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -64,7 +71,13 @@ fn fs_main(@location(0) uvIn: vec2f) -> @location(0) vec4f {
   color += PURPLE * wash * WASH_WEIGHT;
   color += PINK * glow * GLOW_WEIGHT;
   color += CYAN * band * BAND_WEIGHT;
-  color += HAZE * ground * p.groundHaze;
+  // Tinge com a cor real do sol perto do horizonte, como a linha do
+  // horizonte (Sky.drawHorizon) já faz — mistura, e não substitui, para a
+  // bruma manter um tom-base mesmo sem sol nenhum. Piso de 0.35 em vez de
+  // zero: de noite a bruma fica mais fraca, não desaparece.
+  let hazeColor = mix(HAZE, p.sunColor, horizonLit);
+  let hazeLit = mix(0.35, 1.0, horizonLit);
+  color += hazeColor * ground * p.groundHaze * hazeLit;
 
   return vec4f(color, 1.0);
 }
@@ -131,6 +144,9 @@ export class BackgroundPass {
     d[13] = 0;
     d[14] = 0;
     d[15] = 0;
+    d[16] = atmosphere.sunColorR;
+    d[17] = atmosphere.sunColorG;
+    d[18] = atmosphere.sunColorB;
     this.device.queue.writeBuffer(this.paramsBuffer, 0, d);
 
     pass.setPipeline(this.pipeline);

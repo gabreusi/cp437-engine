@@ -168,6 +168,61 @@ export const settings: Settings = {
   vignetteStrength: 0.15,
 };
 
+const SETTINGS_STORAGE_KEY = "cp437-engine/settings";
+
+/**
+ * Cópia congelada dos defaults, feita antes de qualquer `loadSettings()`.
+ *
+ * `settings` acima já É os defaults, mutados no lugar — para "aplicar o
+ * salvo por cima dos defaults" sem depender da ordem de chamada, precisa de
+ * uma segunda cópia que ninguém mais toca. Mesmo problema que `World.load()`
+ * resolve com `createEntity(kind, defaults())` (`scene/world.ts`).
+ */
+const DEFAULT_SETTINGS: Settings = { ...settings };
+
+/**
+ * Grava `settings` inteiro em `localStorage`.
+ *
+ * Chamado a cada mudança de um controle no menu (`slider`/`toggle`,
+ * `ui/menu/schema.ts`) — salvamento automático, sem botão. Falha silenciosa,
+ * mesmo padrão de `World.save()`: um `localStorage` bloqueado não pode
+ * travar a engine, só deixá-la sem memória entre sessões.
+ */
+export const saveSettings = (): void => {
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {
+    // Sem storage, sem salvar — a engine segue com o que está em memória.
+  }
+};
+
+/**
+ * Aplica o que foi salvo por cima de uma cópia limpa dos defaults.
+ *
+ * `Object.assign(settings, DEFAULT_SETTINGS, saved)` primeiro repõe todo
+ * campo no default, depois só sobrescreve os que `saved` de fato tem: um
+ * campo novo (de uma versão mais nova da engine) nasce com o default em vez
+ * de `undefined`, e um campo removido não deixa lixo — ele nunca é copiado.
+ * Chamar uma vez, no início (`main.ts`), antes de qualquer leitura de
+ * `settings`.
+ */
+export const loadSettings = (): void => {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+  } catch {
+    return;
+  }
+  if (raw === null) return;
+
+  try {
+    const saved = JSON.parse(raw) as Partial<Settings>;
+    Object.assign(settings, DEFAULT_SETTINGS, saved);
+  } catch {
+    // Salvo corrompido: fica no default.
+  }
+};
+
 export const CANVAS_BACKGROUND = "#05000e";
 
 export const degreesToRadians = (degrees: number): number =>

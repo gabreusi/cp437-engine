@@ -17,6 +17,7 @@ import {
 import {monolithKind} from "./entities/monolith";
 import {orbKind} from "./entities/orb";
 import {panelKind} from "./entities/panel";
+import {sphereKind} from "./entities/sphere";
 import {spotlightKind} from "./entities/spotlight";
 import type {Renderable, RenderContext} from "./scene";
 
@@ -25,6 +26,7 @@ export const ENTITY_KINDS: Record<EntityKind, EntityKindDef> = {
   [ENTITY.MONOLITH]: monolithKind,
   [ENTITY.PANEL]: panelKind,
   [ENTITY.SPOTLIGHT]: spotlightKind,
+  [ENTITY.SPHERE]: sphereKind,
 };
 
 export const ENTITY_ORDER: readonly EntityKind[] = [
@@ -32,6 +34,7 @@ export const ENTITY_ORDER: readonly EntityKind[] = [
   ENTITY.MONOLITH,
   ENTITY.PANEL,
   ENTITY.SPOTLIGHT,
+  ENTITY.SPHERE,
 ];
 
 const STORAGE_KEY = "cp437-engine/scene";
