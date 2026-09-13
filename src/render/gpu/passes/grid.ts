@@ -3,9 +3,8 @@ import { FULLSCREEN_VERTEX_WGSL, drawFullscreen } from "../fullscreen";
 import type { GlyphAtlas } from "../atlas";
 
 /**
- * O grid inteiro num draw call — a contraparte WGSL de
- * `render/gl/passes/grid.ts`. Lê os dois planos que `ShadingPass` (WebGPU)
- * escreveu (`textureLoad`, célula exata, sem sampler) e o atlas (`textureSample`,
+ * O grid inteiro num draw call. Lê os dois planos que `ShadingPass` escreveu
+ * (`textureLoad`, célula exata, sem sampler) e o atlas (`textureSample`,
  * fracionário dentro da célula).
  */
 const fragmentSource = (): string => `

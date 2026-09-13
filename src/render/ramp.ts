@@ -389,7 +389,7 @@ export const glyphForDiscEdge = (
 
 // ---------------------------------------------------------------------------
 // Bake para a GPU — mesma tabela de sempre, empacotada para `ShadingPass`
-// (`render/gl/passes/shading.ts`) amostrar em vez de buscar.
+// (`render/gpu/passes/shading.ts`) amostrar em vez de buscar.
 //
 // Roda só quando `updateGlyphShapeTable` roda (atlas novo), nunca por quadro:
 // é exatamente por isso que dá para portar `nearestByCoverage` para uma LUT

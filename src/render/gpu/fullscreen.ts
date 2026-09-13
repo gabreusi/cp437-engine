@@ -1,7 +1,6 @@
 /**
- * Triângulo que cobre a tela, gerado a partir do `vertex_index` — a
- * contraparte WGSL de `render/gl/fullscreen.ts`. Todo pass de
- * pós-processamento usa este mesmo vertex shader: sem buffer de vértices,
+ * Triângulo que cobre a tela, gerado a partir do `vertex_index`. Todo pass
+ * de pós-processamento usa este mesmo vertex shader: sem buffer de vértices,
  * sem atributos.
  */
 export const FULLSCREEN_VERTEX_WGSL = `

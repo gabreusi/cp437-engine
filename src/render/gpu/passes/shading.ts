@@ -1,19 +1,22 @@
 import type {Framebuffer} from "../../framebuffer";
 import type {LightWorld} from "../../../light/world";
 import {LIGHT_STRUCT_WGSL, LightUpload, OCCLUDER_STRUCT_WGSL, STAR_STRUCT_WGSL,} from "../light-upload";
+import {SKY_GLSL, toWgslConstants} from "../../sky-colors";
 
 /**
- * O kernel de luz (`light/shade.ts`, `light/trace.ts`, `light/sky.ts`) e a
- * escolha de glifo (`render/ramp.ts`), em WGSL — compute shader de verdade,
- * não um fragment shader disfarçado (ver `render/gl/passes/shading.ts`, a
- * versão WebGL2). Luzes e occluders chegam como `storage buffer` de structs
- * — `array[i]` é o item `i`, sem o empacotamento em texel que o backend
- * WebGL2 precisa.
+ * O kernel de luz (sombra e espelho vêm de `light/trace.ts`; o modelo de céu
+ * está definido abaixo, em `skyRadiance`) e a escolha de glifo
+ * (`render/ramp.ts`), em WGSL — compute shader de verdade, não um fragment
+ * shader disfarçado. Esta é a única implementação que existe: não há mais
+ * kernel de CPU nem backend WebGL2 para manter em sincronia — uma mudança
+ * aqui não precisa ser replicada em lugar nenhum.
+ *
+ * Luzes e occluders chegam como `storage buffer` de structs — `array[i]` é
+ * o item `i` diretamente.
  *
  * Um invocation por célula da grade (`@workgroup_size(8, 8)`), lendo o
  * mesmo G-buffer que `Framebuffer.plotDeferred` grava, e escrevendo nos
- * mesmos dois planos que `GridPass` (WebGPU) consome — o contrato entre CPU
- * e apresentação não mudou, só quem faz a conta do meio.
+ * mesmos dois planos que `GridPass` consome.
  */
 
 const WORKGROUP_SIZE = 8;
@@ -32,11 +35,11 @@ struct Uniforms {
   skyParams2: vec4f,      // sunSpread, noiseSeed, hasGround, groundMirror
   groundAlbedo: vec4f,    // r,g,b, groundReflectivity
   groundEmissive: vec4f,  // r,g,b, groundEmissiveStrength
-  groundGloss: vec4f,     // gloss, _, _, _
+  groundGloss: vec4f,     // gloss, sunRadius, sunSliceRows, sunSliceGap
   shadowParams: vec4f,    // shadowsEnabled, shadowThreshold, maxShadowLights, groundFillLight
-  rampParams: vec4f,      // rampWeight, rampExposure, emissiveRange, _
+  rampParams: vec4f,      // rampWeight, rampExposure, emissiveRange, sunWashIntensity
   counts: vec4f,          // lightCount, occluderCount, starCount, edgeNearCount
-  counts2: vec4f,         // edgeFarCount, colCount, rowCount, _
+  counts2: vec4f,         // edgeFarCount, colCount, rowCount, sunWashSize
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -77,6 +80,7 @@ const MIRROR_RANGE = 400.0;
 const PARALLEL_EPSILON = 1e-9;
 
 const WASH_WIDTH = 0.32;
+const WASH_AZIMUTH_FALLOFF = 1.2;
 const BAND_WIDTH = 0.06;
 const GLOW_FALLOFF = 7.0;
 const MIN_LOBE = 1.0;
@@ -90,14 +94,10 @@ const DEFAULT_LINE_HALF_THICKNESS = 0.1;
 const EDGE_SHAPE_WINDOW = 56;
 const AREA_LUT_LEVELS = 256.0;
 
-const SKY_VOID = vec3f(0.02, 0.0, 0.055);
-const SKY_PINK = vec3f(1.0, 0.235, 0.745);
-const SKY_CYAN = vec3f(0.0, 0.886, 1.0);
-const SKY_PURPLE = vec3f(0.29, 0.024, 0.408);
-const SKY_HAZE = vec3f(0.1, 0.28, 0.36);
-const SKY_WASH_WEIGHT = 0.3;
-const SKY_GLOW_WEIGHT = 0.22;
-const SKY_BAND_WEIGHT = 0.1;
+// Mesma fonte que BackgroundPass (render/sky-colors.ts::SKY_GLSL), nunca uma
+// segunda cópia hand-typed: declara VOID_COLOR, PINK, CYAN, PURPLE, HAZE,
+// WASH_WEIGHT, GLOW_WEIGHT, BAND_WEIGHT.
+${toWgslConstants(SKY_GLSL)}
 
 // ---------------------------------------------------------------------------
 // Ruído (math/noise.ts).
@@ -115,7 +115,29 @@ fn jitterAt(p: vec3f) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Céu (light/sky.ts).
+// Céu — o que um raio vê ao sair da cena e olhar para o céu.
+//
+// É a contraparte em direção do gradiente que BackgroundPass pinta em tela.
+// Não é a mesma fórmula, e não pode ser: aquele é um arranjo de elipses em UV,
+// afinado para ficar bonito na moldura da janela, e não tem sentido para uma
+// direção arbitrária. O que as duas compartilham são as cores e os pesos, que
+// moram em render/sky-colors.ts justamente para não se separarem — o
+// reflexo tem que concordar com o céu pintado atrás dele. Esta função é hoje
+// a única implementação do modelo de céu na engine (não há mais cópia em CPU
+// nem em WebGL2) — qualquer ajuste na física do céu entra só aqui.
+//
+// As camadas, de baixo para cima:
+//
+//   void      a cor do vazio, presente em toda direção
+//   wash      roxo lavando a faixa em torno do horizonte
+//   band      ciano fino colado no horizonte
+//   glow      rosa quente em volta do sol
+//   disco     o sol propriamente, alargado pelo brilho da superfície
+//   chão      abaixo do horizonte não há céu, há bruma
+//
+// As três camadas do meio são luz do sol espalhada, e é o sol (scene/sun.ts)
+// quem diz o quanto: sunGlow, horizonGlow e sunSpread chegam prontos no
+// modelo de céu. Só o vazio é constante — ele não é luz de ninguém.
 // ---------------------------------------------------------------------------
 fn skyRadiance(dir: vec3f, gloss: f32) -> vec3f {
   let sunDir = u.sunDir.xyz;
@@ -127,14 +149,35 @@ fn skyRadiance(dir: vec3f, gloss: f32) -> vec3f {
 
   let cosSun = dot(dir, sunDir);
   let horizon = sunGlow * horizonGlow;
-  let wash = exp(-(dir.y * dir.y) / (WASH_WIDTH * WASH_WIDTH)) * horizon;
+
+  // O roxo tem que sumir quando o reflexo aponta para longe do sol, do
+  // mesmo jeito que o halo de BackgroundPass só existe perto da posição
+  // dele em tela (ver main.ts::updateAtmosphere, "sol atrás da câmera").
+  // Sem o termo de azimute, este era um segundo roxo — uma faixa que
+  // qualquer superfície reflexiva mostrava em toda direção, independente de
+  // onde o sol de verdade estava, e nunca desligava com ele.
+  let sunHoriz = vec2f(sunDir.x, sunDir.z);
+  let dirHoriz = vec2f(dir.x, dir.z);
+  let horizLenProduct = length(sunHoriz) * length(dirHoriz);
+  let cosAzimuth = select(
+    1.0,
+    dot(sunHoriz, dirHoriz) / horizLenProduct,
+    horizLenProduct > 1e-4,
+  );
+  let washSize = max(1e-3, u.counts2.w);
+  let washWidth = WASH_WIDTH * washSize;
+  let azFalloff = exp(-(1.0 - cosAzimuth) * (WASH_AZIMUTH_FALLOFF / washSize));
+  let wash = exp(-(dir.y * dir.y) / (washWidth * washWidth)) * azFalloff * horizon * u.rampParams.w;
   let band = exp(-(dir.y * dir.y) / (BAND_WIDTH * BAND_WIDTH)) * horizon;
-  let glow = exp(-(1.0 - cosSun) * (GLOW_FALLOFF / sunSpread)) * sunGlow;
+  // Mesmo interruptor do roxo: o rosa em volta do disco é a mesma família de
+  // Sun Wash, então some junto quando o ajuste desliga (ver a mesma nota em
+  // BackgroundPass, render/gpu/passes/background.ts).
+  let glow = exp(-(1.0 - cosSun) * (GLOW_FALLOFF / sunSpread)) * sunGlow * u.rampParams.w;
   let lobe = select(pow(cosSun, max(MIN_LOBE, gloss)), 0.0, cosSun <= 0.0);
   let disc = lobe * sunIntensity;
 
-  var c = SKY_VOID + SKY_PURPLE * wash * SKY_WASH_WEIGHT;
-  c += SKY_CYAN * band * SKY_BAND_WEIGHT + SKY_PINK * glow * SKY_GLOW_WEIGHT;
+  var c = VOID_COLOR + PURPLE * wash * WASH_WEIGHT;
+  c += CYAN * band * BAND_WEIGHT + PINK * glow * GLOW_WEIGHT;
   c += u.sunColor.xyz * disc;
 
   let starCount = i32(u.counts.z);
@@ -149,10 +192,123 @@ fn skyRadiance(dir: vec3f, gloss: f32) -> vec3f {
     }
   } else {
     let ground = min(1.0, -dir.y * 4.0);
-    c += (SKY_HAZE * 0.25 - c) * ground;
+    c += (HAZE * 0.25 - c) * ground;
   }
 
   return c * skyIntensity;
+}
+
+// ---------------------------------------------------------------------------
+// O sol, literal, num raio de espelho — não o lóbulo suave de skyRadiance.
+//
+// Só entra em jogo para mirror == true: é a mesma distinção de sempre entre
+// "fosco espalha o sol numa mancha" (skyRadiance, usado por chão e qualquer
+// reflexo comum) e "espelho aperta" — um espelho de verdade devolve o disco
+// como ele é, fatias e glifos de bloco inclusos, não um brilho difuso. As
+// constantes abaixo espelham scene/sun.ts: mudou lá, muda aqui também.
+//
+// A reflexão não tem "fileira de tela" própria para o sol (o ângulo dele não
+// muda com a distância do espelho, só a área que o espelho ocupa na tela
+// muda) — por isso SUN_NOMINAL_RADIUS_ROWS existe: um raio nominal só para
+// sunSliceRows continuar significando "fatia grossa ou fina" nos dois
+// lugares, sem fingir que é uma medida de tela de verdade.
+// ---------------------------------------------------------------------------
+const SUN_TOP_BRIGHTNESS = 1.85;
+const SUN_BOTTOM_BRIGHTNESS = 0.15;
+const SUN_SLICE_START = 0.5;
+const SUN_BASE_STRIPE = 0.08;
+const SUN_SLICE_GAP_MIN_BRIGHTNESS = 0.04;
+const SUN_SLICE_EDGE_SOFTNESS = 0.25;
+const SUN_SLICE_GAP_GROWTH = 0.4;
+const SUN_NOMINAL_RADIUS_ROWS = 10.0;
+const SUN_DISC_EDGE_THICKNESS = 0.14;
+const CELL_ASPECT = 2.0;
+
+const SUN_SHADES = array<vec3f, 8>(
+  vec3f(1.000, 0.835, 0.290),
+  vec3f(1.000, 0.725, 0.235),
+  vec3f(1.000, 0.604, 0.255),
+  vec3f(1.000, 0.486, 0.333),
+  vec3f(1.000, 0.388, 0.475),
+  vec3f(1.000, 0.318, 0.600),
+  vec3f(0.984, 0.275, 0.741),
+  vec3f(0.949, 0.290, 0.839),
+);
+
+struct SunDiscSample {
+  hit: bool,
+  color: vec3f,
+  brightness: f32,
+  nx: f32,
+  ny: f32,
+}
+
+fn sunSliceBrightnessGPU(progress: f32, sliceRows: f32, sliceGap: f32) -> f32 {
+  if (progress < SUN_SLICE_START || progress >= 1.0 - SUN_BASE_STRIPE) { return 1.0; }
+
+  let sliceSpan = 1.0 - SUN_SLICE_START;
+  let sliceDepth = (progress - SUN_SLICE_START) / sliceSpan;
+
+  let bandCount = max(2.0, round(SUN_NOMINAL_RADIUS_ROWS / sliceRows));
+  let bandPhase = fract(sliceDepth * bandCount);
+
+  let gapShare = min(0.85, sliceGap * (1.0 + sliceDepth * SUN_SLICE_GAP_GROWTH));
+  if (bandPhase >= gapShare) { return 1.0; }
+
+  let gapDepth = bandPhase / gapShare;
+  var dip: f32;
+  if (gapDepth < SUN_SLICE_EDGE_SOFTNESS) {
+    dip = gapDepth / SUN_SLICE_EDGE_SOFTNESS;
+  } else if (gapDepth > 1.0 - SUN_SLICE_EDGE_SOFTNESS) {
+    dip = (1.0 - gapDepth) / SUN_SLICE_EDGE_SOFTNESS;
+  } else {
+    dip = 1.0;
+  }
+  return 1.0 - dip * (1.0 - SUN_SLICE_GAP_MIN_BRIGHTNESS);
+}
+
+/**
+ * Onde dir cai no disco do sol, se cair: posição local (nx, ny) — mesma
+ * convenção da visão direta (disc() do rasterizador), ny negativo é o topo
+ * — e o brilho já com a fatia aplicada. hit = false se o raio não entra no
+ * disco, ou o sol está desligado/abaixo do horizonte.
+ */
+fn sunDiscSample(dir: vec3f) -> SunDiscSample {
+  var result: SunDiscSample;
+  result.hit = false;
+
+  let sunRadius = u.groundGloss.y;
+  if (u.skyParams.x <= 0.0 || sunRadius <= 0.0) { return result; }
+
+  let sunDir = u.sunDir.xyz;
+  let cosSun = dot(dir, sunDir);
+  if (cosSun <= cos(sunRadius)) { return result; }
+
+  // Base local do disco: "cima" é a projeção do zênite do mundo no plano
+  // perpendicular ao sol — degenera só com o sol quase no zênite, daí o
+  // eixo de reserva.
+  var up = vec3f(0.0, 1.0, 0.0) - sunDir * sunDir.y;
+  if (dot(up, up) < 1e-6) { up = vec3f(0.0, 0.0, 1.0) - sunDir * sunDir.z; }
+  up = normalize(up);
+  let right = normalize(cross(sunDir, up));
+
+  let perp = dir - sunDir * cosSun;
+  let sinRadius = max(1e-4, sin(sunRadius));
+  let nx = dot(perp, right) / sinRadius;
+  let ny = -dot(perp, up) / sinRadius;
+
+  let progress = clamp((ny + 1.0) * 0.5, 0.0, 1.0);
+  let vertical = SUN_TOP_BRIGHTNESS + (SUN_BOTTOM_BRIGHTNESS - SUN_TOP_BRIGHTNESS) * progress;
+  let brightness = vertical * sunSliceBrightnessGPU(progress, u.groundGloss.z, u.groundGloss.w);
+
+  let shadeIndex = min(7, i32(floor(progress * 8.0)));
+
+  result.hit = true;
+  result.color = SUN_SHADES[shadeIndex] * brightness;
+  result.brightness = brightness;
+  result.nx = nx;
+  result.ny = ny;
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,17 +605,28 @@ fn reflectGround(origin: vec3f, dir: vec3f) -> vec4f {
   return vec4f(shaded, 1.0);
 }
 
+/**
+ * glyphOverride < 0: nenhum, a célula escolhe glifo do jeito de sempre
+ * (forma da própria superfície). Só o disco do sol, acertado por um espelho
+ * de verdade, preenche isto — ver sunDiscSample/sunDiscGlyph acima.
+ */
+struct ShadeResult {
+  color: vec3f,
+  glyphOverride: f32,
+}
+
 fn shadeSurface(
   pos: vec3f, nIn: vec3f, viewDir: vec3f,
   albedo: vec3f, emissive: vec3f, emissiveStrength: f32,
   reflectivity: f32, gloss: f32, mirror: bool,
   ambientOn: bool, reflectionsOn: bool, shadowsAllowed: bool, ownerId: f32
-) -> vec3f {
+) -> ShadeResult {
   let n = faceNormal(nIn, viewDir);
   var color = shadeCore(
     pos, nIn, viewDir, albedo, emissive, emissiveStrength,
     reflectivity, gloss, ambientOn, shadowsAllowed, ownerId
   );
+  var glyphOverride = -1.0;
 
   if (reflectionsOn && reflectivity > 0.0) {
     let ndotv = dot(n, viewDir);
@@ -490,6 +657,17 @@ fn shadeSurface(
       let ground = select(vec4f(0.0), reflectGround(origin, r), mirror);
       if (ground.w > 0.5) {
         reflected = ground.xyz;
+      } else if (mirror) {
+        // Espelho de verdade: o sol, se o raio cair nele, é literal — disco
+        // fatiado com os mesmos glifos da visão direta, não o lóbulo suave
+        // que qualquer outra superfície reflexiva usa.
+        let sun = sunDiscSample(r);
+        if (sun.hit) {
+          reflected = sun.color;
+          glyphOverride = sunDiscGlyph(sun.brightness, sun.nx, sun.ny, u.rampParams.x, u.rampParams.y);
+        } else {
+          reflected = skyRadiance(r, gloss);
+        }
       } else {
         reflected = skyRadiance(r, gloss);
       }
@@ -497,7 +675,7 @@ fn shadeSurface(
     color += reflected * reflectivity;
   }
 
-  return color;
+  return ShadeResult(color, glyphOverride);
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +802,40 @@ fn nearestWeightedGlyphGPU(pool: texture_2d<f32>, count: i32, shape: array<f32, 
   return bestGlyph;
 }
 
+fn sampleDiscCoverageGPU(nx: f32, ny: f32, radiusCols: f32, radiusRows: f32, edgeThickness: f32) -> array<f32, 18> {
+  var samples: array<f32, 18>;
+  for (var i = 0; i < 6; i++) {
+    let s = INTERNAL_SAMPLES[i];
+    let sx = nx + (s.x - 0.5) / radiusCols;
+    let sy = ny + (s.y - 0.5) / radiusRows;
+    let distanceFromEdge = abs(sqrt(sx * sx + sy * sy) - 1.0);
+    samples[i] = max(0.0, 1.0 - distanceFromEdge / edgeThickness);
+  }
+  for (var i = 0; i < 12; i++) {
+    let s = EXTERNAL_SAMPLES[i];
+    let sx = nx + (s.x - 0.5) / radiusCols;
+    let sy = ny + (s.y - 0.5) / radiusRows;
+    let distanceFromEdge = abs(sqrt(sx * sx + sy * sy) - 1.0);
+    samples[6 + i] = max(0.0, 1.0 - distanceFromEdge / edgeThickness);
+  }
+  return samples;
+}
+
+/**
+ * O glifo do disco do sol num raio de espelho — mesmo casamento de forma e
+ * cobertura de glyphForDiscEdge (render/ramp.ts), sobre o pool de aresta
+ * edgeFar (não existe pool de disco próprio na GPU; edgeFar só exclui o
+ * _ do conjunto que a CPU usaria — diferença invisível num disco).
+ */
+fn sunDiscGlyph(brightness: f32, nx: f32, ny: f32, weight: f32, exposure: f32) -> f32 {
+  let radiusRows = SUN_NOMINAL_RADIUS_ROWS;
+  let radiusCols = radiusRows * CELL_ASPECT;
+  let samples = sampleDiscCoverageGPU(nx, ny, radiusCols, radiusRows, SUN_DISC_EDGE_THICKNESS);
+  let shape = enhanceContrast(samples);
+  let level = compressLuminance(brightness, exposure);
+  return nearestWeightedGlyphGPU(edgeFar, i32(u.counts2.x), shape, level, weight);
+}
+
 fn sampleEdgeGlyph(luminance: f32, offsetCol: f32, offsetRow: f32, dirCol: f32, dirRow: f32, near: bool, textureId: i32, worldPos: vec3f) -> f32 {
   let samples = sampleLineCoverage(offsetCol, offsetRow, dirCol, dirRow);
   let shape = enhanceContrast(samples);
@@ -696,7 +908,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       albedoSample.w, gloss, mirror,
       ambientOn, reflectionsOn, true, ownerId
     );
-    let luminance = dot(shaded, vec3f(0.299, 0.587, 0.114));
+    let luminance = dot(shaded.color, vec3f(0.299, 0.587, 0.114));
 
     if (isArea && variantBit && luminance < u.shadowParams.w) {
       textureStore(outCells, cell, vec4f(0.0));
@@ -704,14 +916,21 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
       return;
     }
 
-    let glyph = select(
-      sampleEdgeGlyph(luminance, shapeSample.x, shapeSample.y, shapeSample.z, shapeSample.w, variantBit, textureId, worldPos),
-      sampleAreaGlyph(luminance, textureId, variantBit, worldPos),
-      isArea
-    );
+    var glyph: f32;
+    if (shaded.glyphOverride >= 0.0) {
+      // O raio de espelho acertou o disco do sol: o glifo é o dele, não o da
+      // forma do espelho — ver sunDiscSample/sunDiscGlyph.
+      glyph = shaded.glyphOverride;
+    } else {
+      glyph = select(
+        sampleEdgeGlyph(luminance, shapeSample.x, shapeSample.y, shapeSample.z, shapeSample.w, variantBit, textureId, worldPos),
+        sampleAreaGlyph(luminance, textureId, variantBit, worldPos),
+        isArea
+      );
+    }
 
-    let peak = max(1.0, max(shaded.r, max(shaded.g, shaded.b)));
-    baseColor = shaded / peak;
+    let peak = max(1.0, max(shaded.color.r, max(shaded.color.g, shaded.color.b)));
+    baseColor = shaded.color / peak;
     baseEmissive = peak - 1.0;
     glyphIndex = glyph;
   }
@@ -905,6 +1124,10 @@ export class ShadingPass {
       rampWeight: number;
       rampExposure: number;
       emissiveRange: number;
+      sunSliceRows: number;
+      sunSliceGap: number;
+      sunWashSize: number;
+      sunWashIntensity: number;
     },
   ): void {
     if (this.pipeline === null || this.bindGroup === null) return;
@@ -952,6 +1175,10 @@ export class ShadingPass {
       rampWeight: number;
       rampExposure: number;
       emissiveRange: number;
+      sunSliceRows: number;
+      sunSliceGap: number;
+      sunWashSize: number;
+      sunWashIntensity: number;
     },
   ): void {
     const d = this.uniformData;
@@ -965,11 +1192,11 @@ export class ShadingPass {
     d[o++] = sky.sunSpread; d[o++] = this.noiseSeed; d[o++] = sky.hasGround ? 1 : 0; d[o++] = sky.groundMirror ? 1 : 0;
     d[o++] = sky.groundAlbedoR; d[o++] = sky.groundAlbedoG; d[o++] = sky.groundAlbedoB; d[o++] = sky.groundReflectivity;
     d[o++] = sky.groundEmissiveR; d[o++] = sky.groundEmissiveG; d[o++] = sky.groundEmissiveB; d[o++] = sky.groundEmissiveStrength;
-    d[o++] = sky.groundGloss; d[o++] = 0; d[o++] = 0; d[o++] = 0;
+    d[o++] = sky.groundGloss; d[o++] = sky.sunRadius; d[o++] = options.sunSliceRows; d[o++] = options.sunSliceGap;
     d[o++] = options.shadowsEnabled ? 1 : 0; d[o++] = options.shadowThreshold; d[o++] = options.maxShadowLights; d[o++] = options.groundFillLight;
-    d[o++] = options.rampWeight; d[o++] = options.rampExposure; d[o++] = options.emissiveRange; d[o++] = 0;
+    d[o++] = options.rampWeight; d[o++] = options.rampExposure; d[o++] = options.emissiveRange; d[o++] = options.sunWashIntensity;
     d[o++] = this.lights.lightCount; d[o++] = this.lights.occluderCount; d[o++] = sky.starCount; d[o++] = this.edgeNearCount;
-    d[o++] = this.edgeFarCount; d[o++] = this.colCount; d[o++] = this.rowCount; d[o++] = 0;
+    d[o++] = this.edgeFarCount; d[o++] = this.colCount; d[o++] = this.rowCount; d[o++] = options.sunWashSize;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, d);
   }
@@ -1082,9 +1309,8 @@ const writeF32Texture = (
 
 /**
  * Reempacota o pool achatado (`buildEdgeShapePool`, 8 floats por candidato)
- * em duas fileiras de `count` texels — o mesmo leiaute que o backend WebGL2
- * usa (ver `render/gl/passes/shading.ts::uploadEdgePool`), só que a textura
- * de destino aqui já nasce no tamanho exato.
+ * em duas fileiras de `count` texels — a textura de destino já nasce no
+ * tamanho exato.
  */
 const uploadEdgePool = (
   device: GPUDevice,

@@ -1,8 +1,8 @@
-import { type Settings, settings } from "../../config";
-import type { EntityField, EntityState } from "../../scene/entities/entity";
-import { TEXTURES } from "../../render/ramp";
-import { ENTITY_KINDS, ENTITY_ORDER, type World } from "../../scene/world";
-import type { MenuGroup, MenuItem } from "./model";
+import {FONT, type Settings, settings} from "../../config";
+import type {EntityField, EntityState} from "../../scene/entities/entity";
+import {TEXTURES} from "../../render/ramp";
+import {ENTITY_KINDS, ENTITY_ORDER, type World} from "../../scene/world";
+import type {MenuGroup, MenuItem} from "./model";
 
 /**
  * Os grupos do menu, declarados.
@@ -61,6 +61,11 @@ const TEXTURE_LABELS: Record<string, string> = {
   smooth: "Smooth",
   rough: "Rough",
   irregular: "Irregular",
+};
+
+const FONT_LABELS: Record<string, string> = {
+  [FONT.SYSTEM]: "System",
+  [FONT.OLDSCHOOL]: "Oldschool",
 };
 
 export const buildGroups = (world: World): MenuGroup[] => [
@@ -166,8 +171,9 @@ export const buildGroups = (world: World): MenuGroup[] => [
     ],
   },
   {
-    label: "Sun",
+    label: "Sky",
     items: () => [
+      { kind: "heading", label: "Sun" },
       toggle("sunEnabled", "Enabled"),
       slider({
         key: "sunElevation",
@@ -196,12 +202,20 @@ export const buildGroups = (world: World): MenuGroup[] => [
         suffix: "°",
       }),
       slider({
-        key: "sunSlices",
-        label: "Slices",
-        min: 0.2,
-        max: 3,
-        step: 0.1,
-        digits: 1,
+        key: "sunSliceRows",
+        label: "Slice Thickness",
+        min: 1,
+        max: 6,
+        step: 0.25,
+        digits: 2,
+      }),
+      slider({
+        key: "sunSliceGap",
+        label: "Slice Gap",
+        min: 0,
+        max: 0.85,
+        step: 0.05,
+        digits: 2,
       }),
       slider({
         key: "sunLightIntensity",
@@ -211,11 +225,25 @@ export const buildGroups = (world: World): MenuGroup[] => [
         step: 0.05,
         digits: 2,
       }),
-    ],
-  },
-  {
-    label: "Sky",
-    items: () => [
+      { kind: "heading", label: "Sun Wash" },
+      toggle("sunWashEnabled", "Enabled"),
+      slider({
+        key: "sunWashSize",
+        label: "Size",
+        min: 0.2,
+        max: 3,
+        step: 0.05,
+        digits: 2,
+      }),
+      slider({
+        key: "sunWashIntensity",
+        label: "Intensity",
+        min: 0,
+        max: 3,
+        step: 0.05,
+        digits: 2,
+      }),
+      { kind: "heading", label: "Stars & Reflection" },
       slider({ key: "starCount", label: "Stars", min: 0, max: 4000, step: 50 }),
       slider({
         key: "skyReflectionIntensity",
@@ -230,6 +258,17 @@ export const buildGroups = (world: World): MenuGroup[] => [
   {
     label: "Graphics",
     items: () => [
+      { kind: "heading", label: "Display" },
+      slider({
+        key: "renderScale",
+        label: "Render Scale",
+        min: 0.5,
+        max: 2,
+        step: 0.25,
+        digits: 2,
+        suffix: "x",
+      }),
+      { kind: "heading", label: "Lighting" },
       toggle("lightingEnabled", "Lighting"),
       toggle("shadowsEnabled", "Shadows"),
       toggle("reflectionsEnabled", "Reflections"),
@@ -249,6 +288,18 @@ export const buildGroups = (world: World): MenuGroup[] => [
         step: 1,
       }),
       { kind: "heading", label: "Character Set" },
+      {
+        kind: "choice",
+        label: "Font",
+        options: Object.values(FONT).map((font) => ({
+          value: font,
+          label: FONT_LABELS[font] ?? font,
+        })),
+        get: () => settings.fontFamily,
+        set: (value) => {
+          settings.fontFamily = value as Settings["fontFamily"];
+        },
+      },
       slider({
         key: "rampWeight",
         label: "Ramp weight",
@@ -272,7 +323,7 @@ export const buildGroups = (world: World): MenuGroup[] => [
     items: () => buildObjectItems(world),
   },
   {
-    label: "VFX",
+    label: "Post-p",
     items: () => [
       slider({
         key: "bloomIntensity",
@@ -318,7 +369,7 @@ export const buildGroups = (world: World): MenuGroup[] => [
  * um tipo novo aparece aqui com os controles certos sem tocar no menu.
  */
 const buildObjectItems = (world: World): MenuItem[] => {
-  const items: MenuItem[] = [{ kind: "heading", label: "CRIAR" }];
+  const items: MenuItem[] = [{ kind: "heading", label: "NEW" }];
 
   for (const kind of ENTITY_ORDER) {
     items.push({
@@ -330,7 +381,7 @@ const buildObjectItems = (world: World): MenuItem[] => {
     });
   }
 
-  items.push({ kind: "heading", label: `CENA (${world.entities.length})` });
+  items.push({ kind: "heading", label: `SCENE (${world.entities.length})` });
 
   for (const entity of world.entities) {
     items.push({

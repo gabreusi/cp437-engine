@@ -54,6 +54,7 @@ export class LightWorld {
   readonly sky: SkyModel = {
     sunDirection: vec3(0, 1, 0),
     sunColor: rgb(1, 1, 1),
+    sunLightColor: rgb(1, 1, 1),
     sunRadius: 0.1,
     sunIntensity: 1,
     intensity: 1,

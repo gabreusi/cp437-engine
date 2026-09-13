@@ -1,22 +1,28 @@
-import { CHARSET } from "./palette";
-import { CELL_ASPECT } from "./viewport";
+import {FONT, type FontChoice, settings} from "../config";
+import {CHARSET} from "./palette";
+import {CELL_ASPECT} from "./viewport";
 
 /**
- * O canvas 2D com os 256 glifos, comum aos dois backends de apresentação
- * (`render/gl/atlas.ts` WebGL2, `render/gpu/atlas.ts` WebGPU) — desenhar
- * glifo é decisão de fonte e de `PAINTERS`, não de qual API de GPU vai subir
- * o bitmap depois. Extraído daqui para as duas versões não arriscarem
- * divergir num acento ou numa moldura.
+ * O canvas 2D com os 256 glifos, que `render/gpu/atlas.ts` sobe para a GPU —
+ * desenhar glifo é decisão de fonte e de `PAINTERS`, não de qual API vai
+ * subir o bitmap depois. Extraído daqui e não embutido no upload para as
+ * duas responsabilidades não se misturarem.
  */
 
 /** Colunas no atlas. Com 128 glifos, o atlas fecha em oito fileiras exatas. */
 export const ATLAS_COLS = 16;
 
-const OLDSCHOOL_FONT: Boolean = false;
-
 const BIOS_FAMILY = "BIOS";
 
-const FONT_STACK = `"${OLDSCHOOL_FONT ? BIOS_FAMILY : ""}", "Courier New", Consolas, "DejaVu Sans Mono", monospace`;
+/**
+ * Uma pilha de fonte por escolha do menu (`settings.fontFamily`) — a BIOS só
+ * entra na pilha oldschool porque `ensureFontLoaded` só busca ela; deixá-la
+ * na pilha do sistema também pediria uma segunda carga por gosto nenhum.
+ */
+const FONT_STACKS: Record<FontChoice, string> = {
+  [FONT.OLDSCHOOL]: `"${BIOS_FAMILY}", "Courier New", Consolas, "DejaVu Sans Mono", monospace`,
+  [FONT.SYSTEM]: `"Courier New", Consolas, "DejaVu Sans Mono", monospace`,
+};
 
 /** Largura de célula onde a fonte é medida; a escala final é proporcional. */
 const MEASURE_SIZE = 100;
@@ -220,12 +226,14 @@ export const drawGlyphAtlasCanvas = (cellWidth: number): GlyphAtlasCanvas => {
   if (ctx === null)
     throw new Error("Canvas 2D indisponível para montar o atlas.");
 
+  const fontStack = FONT_STACKS[settings.fontFamily];
+
   // A largura do avanço da fonte cresce linear com o tamanho, então uma
   // medição basta para achar o tamanho que preenche a célula exatamente.
-  ctx.font = `${MEASURE_SIZE}px ${FONT_STACK}`;
+  ctx.font = `${MEASURE_SIZE}px ${fontStack}`;
   const advanceAtMeasureSize = ctx.measureText("0").width;
 
-  ctx.font = `${MEASURE_SIZE * (cellWidth / advanceAtMeasureSize)}px ${FONT_STACK}`;
+  ctx.font = `${MEASURE_SIZE * (cellWidth / advanceAtMeasureSize)}px ${fontStack}`;
   ctx.fillStyle = "#ffffff";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";

@@ -12,7 +12,6 @@ import {
   updateGlyphShapeTable,
 } from "../ramp";
 import type { Viewport } from "../viewport";
-import type { Presenter } from "../gl/presenter";
 import { type GlyphAtlas, atlasCellWidthFor, buildGlyphAtlas } from "./atlas";
 import { GpuContext } from "./context";
 import { type Atmosphere, BackgroundPass } from "./passes/background";
@@ -42,15 +41,40 @@ interface Resources {
 }
 
 /**
- * Onde o framebuffer da CPU vira pixels — backend WebGPU. Implementa a mesma
- * interface `Presenter` que `render/gl/presenter.ts::GlPresenter`, então
- * `main.ts` não sabe qual dos dois está por baixo.
+ * Onde o framebuffer da CPU vira pixels.
  *
- * A diferença estrutural: criação de dispositivo é assíncrona
+ * A interface existe para um presenter de debug (em DOM, por exemplo) poder
+ * entrar no lugar deste sem que nada acima saiba a diferença.
+ */
+export interface Presenter {
+  resize(viewport: Viewport): void;
+  present(
+    framebuffer: Framebuffer,
+    atmosphere: Atmosphere,
+    lights: LightWorld,
+    camera: Camera,
+  ): void;
+  /**
+   * O atlas já foi construído ao menos uma vez — `updateGlyphShapeTable`
+   * já rodou, e `render/ramp.ts::discCandidates`/`edgeCandidates` têm o que
+   * responder. Criação de dispositivo é assíncrona
+   * (`navigator.gpu.requestAdapter`/`requestDevice`), então isto só vira
+   * verdade depois que `GpuContext.whenReady()` resolve — a cena não pode
+   * começar a desenhar (orb, sol, qualquer disco) antes disso, ver o guard
+   * em `main.ts`.
+   */
+  isAtlasReady(): boolean;
+  dispose(): void;
+}
+
+/**
+ * Onde o framebuffer da CPU vira pixels — backend WebGPU, o único que a
+ * engine tem hoje.
+ *
+ * Criação de dispositivo é assíncrona
  * (`navigator.gpu.requestAdapter/requestDevice`), então `resources` só
  * existe depois que `GpuContext.whenReady()` resolve — até lá, todo método
- * é um no-op seguro, do mesmo jeito que `isLost` já protegia o backend
- * WebGL2 contra desenhar sem contexto.
+ * é um no-op seguro.
  */
 export class GpuPresenter implements Presenter {
   private readonly context: GpuContext;
@@ -115,8 +139,7 @@ export class GpuPresenter implements Presenter {
 
   /**
    * Refaz o atlas e tudo que depende da forma medida dos glifos — mesma
-   * hora de sempre (resize/DPI/perda de dispositivo), ver
-   * `render/gl/presenter.ts::rebuildGlyphAtlas`.
+   * hora de sempre: resize, DPI, perda de dispositivo.
    */
   private rebuildAtlas(cellWidth: number): void {
     const resources = this.resources;
@@ -141,8 +164,7 @@ export class GpuPresenter implements Presenter {
 
   /**
    * Refaz o atlas com o tamanho de célula atual — chamado de
-   * `ensureFontLoaded().then(...)` em `main.ts`, ver o comentário
-   * equivalente em `GlPresenter.refreshAtlas`.
+   * `ensureFontLoaded().then(...)` em `main.ts`.
    */
   refreshAtlas(): void {
     const resources = this.resources;
@@ -178,6 +200,10 @@ export class GpuPresenter implements Presenter {
         rampWeight: settings.lightingEnabled ? settings.rampWeight : 0,
         rampExposure: settings.rampExposure,
         emissiveRange: EMISSIVE_RANGE,
+        sunSliceRows: settings.sunSliceRows,
+        sunSliceGap: settings.sunSliceGap,
+        sunWashSize: settings.sunWashSize,
+        sunWashIntensity: settings.sunWashEnabled ? settings.sunWashIntensity : 0,
       },
     );
   }
@@ -236,10 +262,8 @@ export class GpuPresenter implements Presenter {
 
   /**
    * Renderiza um quadro extra fora da tela, em resolução ampliada, e lê de
-   * volta — ver o comentário equivalente em `GlPresenter.capture`. Assíncrono
-   * aqui porque `mapAsync` não tem versão síncrona em WebGPU (diferente de
-   * `gl.readPixels`); quem chama espera a promise resolver antes de usar o
-   * canvas devolvido.
+   * volta. Assíncrono porque `mapAsync` não tem versão síncrona em WebGPU;
+   * quem chama espera a promise resolver antes de usar o canvas devolvido.
    */
   async capture(
     framebuffer: Framebuffer,
@@ -327,7 +351,7 @@ export class GpuPresenter implements Presenter {
     return canvas;
   }
 
-  /** Ver `ShadingPass.readPlanes` (WebGL2) — aqui via `mapAsync`, então devolve uma promise. */
+  /** Lê os dois planos que `ShadingPass` produziu, via `mapAsync` — por isso devolve uma promise. */
   async readShadedPlanes(): Promise<ShadedPlanes | null> {
     const resources = this.resources;
     const viewport = this.viewport;

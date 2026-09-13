@@ -66,6 +66,9 @@ export interface SurfaceSample {
   y: number;
   z: number;
   depth: number;
+  /** Célula de tela para onde este fragmento arredonda — ver `Ground`, que usa isto para recusar a linha da grade na fileira exata do horizonte. */
+  col: number;
+  row: number;
   /**
    * Onde exatamente, dentro da célula, a reta cruza — entre -0.5 e 0.5 nos
    * dois eixos, até o centro. É o que falta à direção para o casamento de
@@ -133,6 +136,8 @@ export class Rasterizer {
     y: 0,
     z: 0,
     depth: 0,
+    col: 0,
+    row: 0,
     offsetCol: 0,
     offsetRow: 0,
     dirCol: 1,
@@ -342,6 +347,8 @@ export class Rasterizer {
       const row = startRow + spanRow * s;
       const plotCol = Math.round(col);
       const plotRow = Math.round(row);
+      sample.col = plotCol;
+      sample.row = plotRow;
       sample.offsetCol = col - plotCol;
       sample.offsetRow = row - plotRow;
 

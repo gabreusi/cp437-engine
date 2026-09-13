@@ -12,7 +12,7 @@ fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
 }
 `;
 
-/** Gaussiana separável de nove taps — mesmos pesos de `render/gl/passes/bloom.ts`. */
+/** Gaussiana separável de nove taps. */
 const blurSource = (): string => `
 struct Params {
   direction: vec2f,
@@ -69,9 +69,7 @@ class DirectionUniform {
   }
 }
 
-/**
- * Bloom em duas escalas — a contraparte WGSL de `render/gl/passes/bloom.ts`.
- */
+/** Bloom em duas escalas: meia e um quarto de resolução, borradas e somadas no composite. */
 export class BloomPass {
   private readonly blitPipeline: GPURenderPipeline;
   private readonly blurPipeline: GPURenderPipeline;

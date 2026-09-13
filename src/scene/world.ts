@@ -1,11 +1,11 @@
-import { copyRgb, rgb } from "../math/color";
-import { copy, vec3 } from "../math/vec3";
-import { traceNearest } from "../light/trace";
-import type { LightWorld } from "../light/world";
-import { GLYPH } from "../render/palette";
-import type { SurfaceStyle } from "../render/rasterizer";
-import { SurfacePen } from "../render/shading";
-import { BoxShape } from "./entities/box";
+import {copyRgb, rgb} from "../math/color";
+import {copy, vec3} from "../math/vec3";
+import {traceNearest} from "../light/trace";
+import type {LightWorld} from "../light/world";
+import {GLYPH} from "../render/palette";
+import type {SurfaceStyle} from "../render/rasterizer";
+import {SurfacePen} from "../render/shading";
+import {BoxShape} from "./entities/box";
 import {
   createEntity,
   ENTITY,
@@ -14,11 +14,11 @@ import {
   type EntityState,
   reserveIds,
 } from "./entities/entity";
-import { monolithKind } from "./entities/monolith";
-import { orbKind } from "./entities/orb";
-import { panelKind } from "./entities/panel";
-import { spotlightKind } from "./entities/spotlight";
-import type { Renderable, RenderContext } from "./scene";
+import {monolithKind} from "./entities/monolith";
+import {orbKind} from "./entities/orb";
+import {panelKind} from "./entities/panel";
+import {spotlightKind} from "./entities/spotlight";
+import type {Renderable, RenderContext} from "./scene";
 
 export const ENTITY_KINDS: Record<EntityKind, EntityKindDef> = {
   [ENTITY.ORB]: orbKind,
@@ -274,7 +274,7 @@ export class World implements Renderable {
       entity.orbitRadius = orbitRadius;
       entity.orbitSpeed = speed;
       entity.size["x"] = 1;
-      entity.range = 50;
+      entity.range = 25;
     };
 
     const monolith = (
@@ -291,6 +291,7 @@ export class World implements Renderable {
       entity.size.x = 1;
       entity.size.y = halfHeight;
       entity.size.z = 1;
+      entity.intensity = 0;
       return entity;
     };
 
@@ -329,14 +330,14 @@ export class World implements Renderable {
 
     hero.texture = "smooth";
     hero.reflectivity = 1;
-    hero.gloss = 200;
+    hero.gloss = 400;
     hero.color.r = 1;
     hero.color.g = 1;
     hero.color.b = 1;
 
     orb(
       west.position.x,
-      7,
+      3,
       west.position.z,
       [0.65, 0.35, 1],
       3.5,
@@ -345,7 +346,7 @@ export class World implements Renderable {
     );
     orb(
       east.position.x,
-      7,
+      3,
       east.position.z,
       [0.2, 1, 0.85],
       3.5,
@@ -361,9 +362,9 @@ export class World implements Renderable {
       -35,
       -55,
       [1, 0, 0],
-      15,
+      5,
       80,
-      45,
+      65,
       "Red spotlight",
     );
     spot(
@@ -373,9 +374,9 @@ export class World implements Renderable {
       35,
       -55,
       [0, 1, 0],
-      15,
+      5,
       80,
-      45,
+      65,
       "Green spotlight",
     );
     spot(
@@ -385,9 +386,9 @@ export class World implements Renderable {
       180,
       -55,
       [0, 0, 1],
-      15,
+      5,
       80,
-      45,
+      65,
       "Blue spotlight",
     );
 
@@ -404,8 +405,9 @@ export class World implements Renderable {
     panel.color.r = 0.75;
     panel.color.g = 0.85;
     panel.color.b = 1;
-    panel.reflectivity = 0.9;
-    panel.gloss = 220;
+    panel.reflectivity = 1;
+    panel.gloss = 400;
+    panel.intensity = 0;
     panel.mirror = true;
 
     this.selectedId = null;

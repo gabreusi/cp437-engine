@@ -1,15 +1,13 @@
 import type { Viewport } from "../viewport";
 
 /**
- * Dono do dispositivo WebGPU e do ciclo de vida dele — a contraparte de
- * `render/gl/context.ts` para o backend WebGPU (`render/gpu/`).
+ * Dono do dispositivo WebGPU e do ciclo de vida dele.
  *
- * `device.lost` é o equivalente de `webglcontextlost`: acontece em suspensão
- * de aba, troca de GPU em máquina híbrida e crash de driver, não só em erro
- * de programação. Sem tratar, a tela fica preta para sempre. Quem cria
- * recurso de GPU se registra em `onRestore` e é chamado de volta depois que
- * um dispositivo novo é pedido — o mesmo contrato que o backend WebGL2 já
- * tinha, para `GpuPresenter` poder reaproveitar a mesma forma.
+ * `device.lost` é o equivalente WebGPU de `webglcontextlost`: acontece em
+ * suspensão de aba, troca de GPU em máquina híbrida e crash de driver, não só
+ * em erro de programação. Sem tratar, a tela fica preta para sempre. Quem cria
+ * recurso de GPU se registra em `onRestore` e é chamado de volta depois que um
+ * dispositivo novo é pedido.
  */
 export class GpuContext {
   device!: GPUDevice;

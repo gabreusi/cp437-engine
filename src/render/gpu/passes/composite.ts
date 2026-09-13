@@ -1,9 +1,6 @@
 import { FULLSCREEN_VERTEX_WGSL, drawFullscreen } from "../fullscreen";
 
-/**
- * Junta cena e bloom e aplica o tratamento de CRT — a contraparte WGSL de
- * `render/gl/passes/composite.ts`.
- */
+/** Junta cena e bloom e aplica o tratamento de CRT. */
 const fragmentSource = (): string => `
 struct Params {
   bloomIntensity: f32,

@@ -1,7 +1,7 @@
 # CP437 Engine — guia para o Claude
 
 Engine 3D em TypeScript puro que rasteriza para uma grade de caracteres na CPU e
-apresenta tudo em **um draw call** WebGL2. Sem dependência de runtime (Three.js,
+apresenta tudo em **um draw call** WebGPU. Sem dependência de runtime (Three.js,
 libs de render ou de math não existem aqui — e não devem ser adicionadas).
 
 > O `README.md` é a fonte do **porquê**: cada decisão de projeto está justificada
@@ -42,10 +42,11 @@ scene.contribute(ctx)  → LightWorld (luzes + occluders), antes de qualquer des
 scene.render(ctx)      → primitivas em coordenadas de MUNDO
 scene.render(ctx) fase 2 → renderGlow(ctx): incidência sobre o que já foi desenhado
 Rasterizer (CPU)       → view → clip near → projeção → célula → clip 2D → DDA
-SurfacePen.style       → shadeSurface (ambiente + luzes + sombra + reflexo)
-ramp                   → luminância + textura → glifo
-Framebuffer (CPU)      → 2 planos RGBA8: [glifo, alpha, emissivo, 255] e [r,g,b,255]
-GlPresenter (GPU)      → background → grid → bloom → composite
+SurfacePen.style       → G-buffer (posição, normal, material, forma); sem luz, glifo geométrico direto
+Framebuffer (CPU)      → 2 planos RGBA8 [glifo, alpha, emissivo, 255]/[r,g,b,255] + G-buffer
+──── fronteira CPU/GPU ─────────────────────────────────────────────
+ShadingPass (WGSL, compute) → shadeSurface + ramp: luminância + textura → glifo, por célula
+GpuPresenter (WebGPU)  → background → grid → bloom → composite
 ```
 
 ## Contratos que todo código novo respeita
@@ -121,8 +122,9 @@ herdar de.
   sala o sol atravessa a parede como se ela não existisse.
 - Ruído de textura irregular é ancorado em **posição de mundo quantizada**, nunca
   em célula de tela.
-- `webglcontextlost` é tratado desde o começo (`gl/context.ts`); recursos são
-  recriados. Não assuma contexto vivo.
+- Perda de dispositivo é tratada desde o começo (`device.lost`, `render/gpu/context.ts`
+  — o equivalente WebGPU de `webglcontextlost`); recursos são recriados. Não
+  assuma dispositivo vivo.
 
 ## Onde mexer
 
@@ -130,11 +132,11 @@ herdar de.
 | --- | --- |
 | novo ajuste do menu | `config.ts` (`Settings` + default) → `ui/menu/schema.ts` (grupo) |
 | novo tipo de objeto | `scene/entities/<novo>.ts` com `EntityKindDef` → registre em `ENTITY_KINDS` e `ENTITY_ORDER` (`scene/world.ts`) → `ENTITY` em `entity.ts` |
-| novo glifo | `render/palette.ts` (`GLYPH`, `CHARSET` — tabela CP437 real); desenhados à mão em `render/gl/atlas.ts` (`PAINTERS`, indexado por caractere) |
-| efeito de tela | `render/gl/passes/` + ordem em `gl/presenter.ts` |
+| novo glifo | `render/palette.ts` (`GLYPH`, `CHARSET` — tabela CP437 real); desenhados à mão em `render/atlas-canvas.ts` (`PAINTERS`, indexado por caractere) |
+| efeito de tela | `render/gpu/passes/` + ordem em `gpu/presenter.ts` |
 | como a luz vira caractere | `render/ramp.ts` (rampa e texturas) |
 | escolha de glifo por forma (aresta, disco, cobertura de preenchimento) | `render/glyph-shape.ts` (amostragem, contraste, vizinho mais próximo) + candidatos em `render/ramp.ts` |
-| matemática de luz | `light/shade.ts` (kernel) e `light/trace.ts` (raio×esfera/caixa) |
+| matemática de luz | `render/gpu/passes/shading.ts` (kernel de sombreamento, reflexo e céu, em WGSL — única implementação, não há mais versão CPU) e `light/trace.ts` (raio×esfera/caixa; ainda roda na CPU para as sondas de `light/mirror-bounce.ts`) |
 | gesto de edição | `ui/manipulator.ts` (um só, para menu e editor) |
 | efeito de luz que tinge em vez de desenhar (feixe, poeira) | `Fragment.fuse` no `SurfaceStyle` + hook `renderGlow` do `EntityKindDef` (ver `spotlight.ts`) |
 

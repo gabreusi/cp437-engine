@@ -3,8 +3,8 @@ import { CHARSET } from "./palette";
 
 /**
  * Os dois planos finais, glifo+cor — vêm do `Framebuffer` da CPU quando não
- * há luz nenhuma na célula, ou do `readPixels` da saída do `ShadingPass`
- * quando há: ver `GlPresenter.readShadedPlanes` e o comentário ali sobre por
+ * há luz nenhuma na célula, ou da leitura de volta da saída do `ShadingPass`
+ * quando há: ver `GpuPresenter.readShadedPlanes` e o comentário ali sobre por
  * que não dá mais para ler `framebuffer.cells`/`colors` direto depois que o
  * sombreamento migrou para a GPU.
  */

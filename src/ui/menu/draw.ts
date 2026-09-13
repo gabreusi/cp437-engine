@@ -1,9 +1,9 @@
-import { type Rgb, fromHex } from "../../math/color";
-import type { Framebuffer } from "../../render/framebuffer";
-import { COLOR, GLYPH } from "../../render/palette";
-import { OVERLAY_DEPTH, drawBox, drawFill, drawText } from "../../render/text";
-import type { Viewport } from "../../render/viewport";
-import { type MenuGroup, type MenuItem, formatValue } from "./model";
+import {fromHex, type Rgb} from "../../math/color";
+import type {Framebuffer} from "../../render/framebuffer";
+import {COLOR, GLYPH} from "../../render/palette";
+import {drawBox, drawFill, drawText, OVERLAY_DEPTH} from "../../render/text";
+import type {Viewport} from "../../render/viewport";
+import {formatValue, type MenuGroup, type MenuItem} from "./model";
 
 /**
  * O menu desenhado na própria grade de caracteres.
@@ -301,6 +301,7 @@ const drawItems = (
     const y = layout.itemFirstRow + (index - state.scroll);
     const focused = index === state.itemIndex && !state.onGroups;
     const hovered = index === state.hoverItem;
+
 
     drawItem(framebuffer, layout, item, y, focused, hovered);
   }

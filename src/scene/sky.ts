@@ -1,6 +1,7 @@
 import { settings } from "../config";
-import type { Rgb } from "../math/color";
+import { lerpRgb, rgb, type Rgb } from "../math/color";
 import { hashNoise } from "../math/noise";
+import type { SkyModel } from "../light/types";
 import { COLOR, GLYPH, STAR_TINTS } from "../render/palette";
 import { createProjected } from "../render/rasterizer";
 import type { RenderContext, Renderable } from "./scene";
@@ -42,6 +43,18 @@ const twinkleGlyph = (
 
 /** Expoente que rarefaz as estrelas perto do horizonte, para o sol respirar. */
 const ELEVATION_BIAS = 0.7;
+
+/** Rascunho de módulo: cor da linha do horizonte, já tingida pelo sol. */
+const horizonTint: Rgb = rgb();
+
+/**
+ * Quanto o poente pode tingir a linha do horizonte, no máximo.
+ *
+ * Mesmo fator que acende a faixa pintada atrás dela (`sunGlow * horizonGlow`,
+ * ver `BackgroundPass`/`skyRadiance`) — reusar o número em vez de inventar um
+ * novo é o que impede a linha e o gradiente por trás dela discordarem de cor.
+ */
+const HORIZON_TINT_WEIGHT = 0.85;
 
 interface Star {
   /** Direção unitária no mundo. */
@@ -114,8 +127,13 @@ export class Sky implements Renderable {
     lights.sky.stars = this.stars;
   }
 
-  render({ rasterizer, viewport, time }: RenderContext): void {
-    this.drawHorizon(rasterizer.horizonRow(), viewport.colCount, rasterizer);
+  render({ rasterizer, viewport, time, lights }: RenderContext): void {
+    this.drawHorizon(
+      rasterizer.horizonRow(),
+      viewport.colCount,
+      rasterizer,
+      lights.sky,
+    );
 
     for (const star of this.stars) {
       if (!rasterizer.projectDirection(star.x, star.y, star.z, this.projected))
@@ -134,17 +152,34 @@ export class Sky implements Renderable {
     row: number,
     colCount: number,
     rasterizer: RenderContext["rasterizer"],
+    sky: SkyModel,
   ): void {
-    // `GROUND_LINE` e não `_`: a bruma rasteira começa na base desta célula,
-    // e o underscore da fonte para antes dela, deixando uma fresta de céu
-    // entre a linha e a bruma.
+    // O sol tinge a linha do horizonte do mesmo jeito que tinge o gradiente
+    // atrás dela: pela cor de verdade da luz (`sunLightColor`, não o amarelo
+    // fixo de `sunColor`), na força que o poente já entrega (`sunGlow *
+    // horizonGlow`, a mesma conta que acende a faixa pintada).
+    const glow = Math.min(1, sky.sunGlow * sky.horizonGlow) * HORIZON_TINT_WEIGHT;
+    lerpRgb(horizonTint, COLOR.HORIZON, sky.sunLightColor, glow);
+
+    // `GLYPH.GROUND_LINE` e não `_`: a bruma rasteira começa na base desta
+    // célula, e o underscore da fonte para antes dela, deixando uma fresta de
+    // céu entre a linha e a bruma.
+    //
+    // Profundidade `Infinity`: a linha do horizonte é o próprio "nunca
+    // tocada" de `Framebuffer.wins()` — perde para qualquer geometria de
+    // verdade que a `render()` de outra cena desenhe por cima (é assim que um
+    // corpo que cruza a fileira do horizonte continua ocluindo-o
+    // normalmente). O que a grade do chão não pode fazer é vencer por *essa*
+    // porta: `Ground` já recusa a própria linha nesta fileira exata (ver
+    // `sample.row` em `Ground.render`), então não sobra ninguém, além de
+    // geometria de verdade, para disputar esta célula.
     const target = Math.round(row);
     for (let col = 0; col < colCount; col += 1) {
       rasterizer.plotCell(
         col,
         target,
         GLYPH.GROUND_LINE,
-        COLOR.HORIZON,
+        horizonTint,
         Infinity,
       );
     }

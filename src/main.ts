@@ -125,6 +125,8 @@ const atmosphere = {
   sunGlow: 1,
   horizonGlow: 1,
   sunSpread: 1,
+  washSize: 1,
+  washIntensity: 1,
 };
 const sunDir = { x: 0, y: 0, z: -1 };
 const sunScreen = createProjected();
@@ -146,6 +148,7 @@ const syncViewport = (): Viewport => {
     window.innerWidth,
     window.innerHeight,
     window.devicePixelRatio,
+    settings.renderScale,
   );
   if (viewport === null || !viewportEquals(viewport, next)) {
     viewport = next;
@@ -153,6 +156,18 @@ const syncViewport = (): Viewport => {
     presenter.resize(next);
   }
   return viewport;
+};
+
+/**
+ * A fonte só entra no atlas, não no `Viewport` — trocá-la no menu não muda
+ * coluna/fileira nem resolução, então `syncViewport` nunca percebe. Sem este
+ * watch a nova fonte só apareceria no próximo resize.
+ */
+let lastFontFamily = settings.fontFamily;
+const syncFont = (): void => {
+  if (settings.fontFamily === lastFontFamily) return;
+  lastFontFamily = settings.fontFamily;
+  presenter.refreshAtlas();
 };
 
 const update = (deltaSeconds: number): void => {
@@ -186,6 +201,10 @@ const updateAtmosphere = (currentViewport: Viewport): void => {
   atmosphere.sunGlow = lights.sky.sunGlow;
   atmosphere.horizonGlow = lights.sky.horizonGlow;
   atmosphere.sunSpread = lights.sky.sunSpread;
+  // Tamanho/força do roxo são preferência de tela, não física do sol — como
+  // `groundHaze` logo abaixo, vêm direto de `settings`.
+  atmosphere.washSize = settings.sunWashSize;
+  atmosphere.washIntensity = settings.sunWashEnabled ? settings.sunWashIntensity : 0;
 
   sunDirection(sunDir);
   if (rasterizer.projectDirection(sunDir.x, sunDir.y, sunDir.z, sunScreen)) {
@@ -199,6 +218,7 @@ const updateAtmosphere = (currentViewport: Viewport): void => {
 
 const render = (time: number): void => {
   const currentViewport = syncViewport();
+  syncFont();
   if (framebuffer === null) return;
 
   // Criação de dispositivo é assíncrona no backend WebGPU

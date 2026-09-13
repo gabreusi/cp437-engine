@@ -45,8 +45,8 @@ import type { Rgb } from "../math/color";
  *            por cima continuaria acendendo o fundo do menu.
  *
  * O G-buffer (posição, normal, material, forma) mora em arrays `Float32Array`
- * separados, um por campo, no leiaute que `render/gl/passes/shading.ts` sobe
- * como textura `RGBA32F` — ver `GBUFFER_FIELDS` abaixo. Só tem conteúdo onde
+ * separados, um por campo, no leiaute que `ShadingPass` sobe como textura
+ * `RGBA32F` — ver `GBUFFER_FIELDS` abaixo. Só tem conteúdo onde
  * `cells.a === 0`.
  */
 const DEPTH_TOLERANCE = 1e-3;

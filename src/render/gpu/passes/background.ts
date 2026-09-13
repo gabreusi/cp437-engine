@@ -1,24 +1,7 @@
-import { SKY_GLSL } from "../../sky-colors";
+import { SKY_GLSL, toWgslConstants } from "../../sky-colors";
 import { FULLSCREEN_VERTEX_WGSL, drawFullscreen } from "../fullscreen";
 
-/**
- * Gradientes do céu — a contraparte WGSL de `render/gl/passes/background.ts`.
- * `SKY_GLSL` é reaproveitado mesmo o nome dizendo GLSL: são só declarações
- * `const vec3 NOME = vec3(...)`, sintaxe que WGSL também aceita (`vec3f` no
- * lugar de `vec3` é a única diferença, tratada abaixo).
- */
-
-/**
- * `const vec3 NOME = vec3(...)` (GLSL) vira `const NOME = vec3f(...)`
- * (WGSL): o tipo entra depois do nome em WGSL (`nome: tipo`), não antes
- * como em GLSL/C, então a troca certa é *remover* a palavra-chave de tipo
- * da declaração — o inicializador já entrega o tipo, WGSL infere sozinho —
- * e só trocar o nome do construtor (`vec3(` → `vec3f(`).
- */
-const toWgslConstants = (glsl: string): string =>
-  glsl
-    .replace(/const (?:vec3|float) (\w+) = /g, "const $1 = ")
-    .replace(/\bvec3\(/g, "vec3f(");
+/** Gradientes do céu, pintados atrás da cena — ver `toWgslConstants` para a origem de `SKY_GLSL` aqui. */
 
 export interface Atmosphere {
   sunU: number;
@@ -29,6 +12,9 @@ export interface Atmosphere {
   sunGlow: number;
   horizonGlow: number;
   sunSpread: number;
+  /** Alcance do roxo em volta do sol, relativo ao padrão. Zero de `washIntensity` desliga a camada. */
+  washSize: number;
+  washIntensity: number;
 }
 
 const fragmentSource = (): string => `
@@ -44,7 +30,9 @@ struct Params {
   sunGlow: f32,
   horizonGlow: f32,
   sunSpread: f32,
-  _pad: f32,
+  washSize: f32,
+  washIntensity: f32,
+  _pad: vec3f,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -60,8 +48,13 @@ fn fs_main(@location(0) uvIn: vec2f) -> @location(0) vec4f {
 
   let horizonLit = p.sunGlow * p.horizonGlow;
 
-  let wash = halo(uv, vec2f(p.sun.x, p.horizon) * p.aspect, vec2f(1.30, 0.85)) * horizonLit;
-  let glow = halo(uv, p.sun * p.aspect, vec2f(0.50, 0.34) * p.sunSpread) * p.sunGlow;
+  let washRadius = vec2f(1.30, 0.85) * p.washSize;
+  let wash = halo(uv, vec2f(p.sun.x, p.horizon) * p.aspect, washRadius) * horizonLit * p.washIntensity;
+  // O rosa em volta do disco é a mesma família visual do roxo — Sun Wash no
+  // menu controla os dois juntos, não só o roxo. Desligado (washIntensity
+  // zerado em main.ts, updateAtmosphere), o disco fica só a cor dele, sem
+  // halo nenhum.
+  let glow = halo(uv, p.sun * p.aspect, vec2f(0.50, 0.34) * p.sunSpread) * p.sunGlow * p.washIntensity;
   let band = halo(uv, vec2f(p.sun.x, p.horizon) * p.aspect, vec2f(0.95, 0.10)) * horizonLit;
 
   let below = p.ground - uvIn.y;
@@ -81,7 +74,7 @@ export class BackgroundPass {
   private readonly pipeline: GPURenderPipeline;
   private readonly paramsBuffer: GPUBuffer;
   private readonly bindGroup: GPUBindGroup;
-  private readonly paramsData = new Float32Array(12);
+  private readonly paramsData = new Float32Array(20);
 
   constructor(
     private readonly device: GPUDevice,
@@ -133,7 +126,11 @@ export class BackgroundPass {
     d[8] = atmosphere.sunGlow;
     d[9] = atmosphere.horizonGlow;
     d[10] = atmosphere.sunSpread;
-    d[11] = 0;
+    d[11] = atmosphere.washSize;
+    d[12] = atmosphere.washIntensity;
+    d[13] = 0;
+    d[14] = 0;
+    d[15] = 0;
     this.device.queue.writeBuffer(this.paramsBuffer, 0, d);
 
     pass.setPipeline(this.pipeline);

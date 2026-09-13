@@ -134,6 +134,14 @@ export interface SkyModel {
   /** Direção unitária apontando para o sol. */
   sunDirection: Vec3;
   sunColor: Rgb;
+  /**
+   * Cor de verdade da luz direcional do sol — separada de `sunColor` de
+   * propósito. `sunColor` é o topo do disco (o mesmo amarelo sempre, para o
+   * halo/reflexo suave concordar com o que se vê nele); esta é a cor que de
+   * fato ilumina superfície, e pode ser um tom bem diferente — quem tinge o
+   * horizonte (`Sky.drawHorizon`) e a grade lê daqui, não de `sunColor`.
+   */
+  sunLightColor: Rgb;
   /** Raio angular do disco, em radianos. */
   sunRadius: number;
   sunIntensity: number;

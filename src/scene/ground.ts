@@ -6,6 +6,7 @@ import { COLOR } from "../render/palette";
 import { TEXTURE_ID } from "../render/ramp";
 import { createDeferredSurface } from "../render/framebuffer";
 import { createGroundPen, createMaterial, fogAmount, groundBand } from "../render/shading";
+import type { SurfaceStyle } from "../render/rasterizer";
 import type { Renderable, RenderContext } from "./scene";
 
 /**
@@ -37,6 +38,29 @@ export class Ground implements Renderable {
   private readonly ray: Vec3 = vec3();
   private readonly surface = createDeferredSurface();
 
+  /** Fileira do horizonte do quadro atual — `render()` a atualiza antes de desenhar. */
+  private horizonRow = 0;
+
+  /**
+   * `pen.style`, mas recusando a fileira exata do horizonte.
+   *
+   * A grade é gerada como segmentos que só terminam em `±reach`, então uma
+   * linha quase paralela à direção da câmera projeta muitos pontos de
+   * profundidades bem diferentes na mesma vizinhança de tela perto do ponto
+   * de fuga — e alguns caem exatamente na fileira do horizonte. Ali,
+   * `Sky.drawHorizon` já reserva o glifo com profundidade `Infinity` (a mesma
+   * convenção de estrela, "no infinito"): sem esta recusa, a linha da grade
+   * também tem profundidade finita e sempre venceria o empate, cobrindo a
+   * linha do horizonte com um traço de grade em vez dela. Um corpo de
+   * verdade que cruze esta fileira não passa por aqui — ele desenha pelo
+   * `EntityKindDef` de cada tipo, não por este estilo — então continua
+   * ocluindo o horizonte normalmente.
+   */
+  private readonly gridLineStyle: SurfaceStyle = (sample, out) => {
+    if (sample.row === this.horizonRow) return false;
+    return this.pen.style(sample, out);
+  };
+
   /**
    * Publica o material que um espelho vê do chão, antes de qualquer
    * `render()` do quadro — ver `LightWorld.groundMaterial` e o comentário em
@@ -63,6 +87,8 @@ export class Ground implements Renderable {
     const spacing = Math.max(0.1, settings.gridSize);
     const reach = settings.viewDistance;
 
+    this.horizonRow = Math.round(rasterizer.horizonRow());
+
     // Ancorar na célula da câmera é o que mantém a grade quieta enquanto se
     // anda: as linhas não deslizam, elas simplesmente já estão lá.
     const baseX = Math.floor(camera.position.x / spacing) * spacing;
@@ -74,11 +100,11 @@ export class Ground implements Renderable {
 
       // Paralelas a X.
       const z = baseZ + offset;
-      rasterizer.line(baseX - reach, 0, z, baseX + reach, 0, z, this.pen.style);
+      rasterizer.line(baseX - reach, 0, z, baseX + reach, 0, z, this.gridLineStyle);
 
       // Paralelas a Z.
       const x = baseX + offset;
-      rasterizer.line(x, 0, baseZ - reach, x, 0, baseZ + reach, this.pen.style);
+      rasterizer.line(x, 0, baseZ - reach, x, 0, baseZ + reach, this.gridLineStyle);
     }
 
     this.fillLitFloor(context);
@@ -148,7 +174,7 @@ export class Ground implements Renderable {
     // O chão fica de um lado só do horizonte, e qual lado depende de a
     // câmera estar acima ou abaixo do plano. Começar na fileira certa evita
     // lançar meia tela de raios que não encontram nada.
-    const horizon = Math.round(rasterizer.horizonRow());
+    const horizon = this.horizonRow;
     const firstRow = height > 0 ? Math.max(0, horizon + 1) : 0;
     const lastRow =
       height > 0
