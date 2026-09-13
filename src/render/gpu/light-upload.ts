@@ -40,7 +40,7 @@ struct Occluder {
   row7: vec4f,  // hasMaterial, albedo.r, albedo.g, albedo.b
   row8: vec4f,  // emissive.r, emissive.g, emissive.b, emissiveStrength
   row9: vec4f,  // reflectivity, gloss, mirror, castsShadow
-  row10: vec4f, // ownerId, _, _, _
+  row10: vec4f, // ownerId, mirrorFaceAxis.x, mirrorFaceAxis.y, mirrorFaceAxis.z
 };`;
 
 export const STAR_STRUCT_WGSL = `
@@ -235,9 +235,9 @@ export class LightUpload {
       d[base + 38] = material?.mirror ? 1 : 0;
       d[base + 39] = occluder.castsShadow ? 1 : 0;
       d[base + 40] = occluder.ownerId;
-      d[base + 41] = 0;
-      d[base + 42] = 0;
-      d[base + 43] = 0;
+      d[base + 41] = occluder.mirrorFaceAxis.x;
+      d[base + 42] = occluder.mirrorFaceAxis.y;
+      d[base + 43] = occluder.mirrorFaceAxis.z;
     }
 
     // Acima do teto, uma amostra espalhada pelo array inteiro em vez dos

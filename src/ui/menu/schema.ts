@@ -300,6 +300,7 @@ const rawGroups = (world: World): MenuGroup[] => [
       toggle("lightingEnabled", "Lighting"),
       toggle("shadowsEnabled", "Shadows"),
       toggle("reflectionsEnabled", "Reflections"),
+      toggle("doubleReflections", "Double Reflections"),
       slider({
         key: "ambientLevel",
         label: "Ambient",

@@ -78,6 +78,14 @@ export interface Settings {
   lightingEnabled: boolean;
   shadowsEnabled: boolean;
   reflectionsEnabled: boolean;
+  /**
+   * Um espelho que mostra outro espelho traça a reflexão dele também, um
+   * nível a mais — a esfera refletida num painel ao lado passa a mostrar,
+   * nela, o que a própria esfera reflete (a grade, o céu). Desligado por
+   * padrão: mais um traçado de cena inteira por fragmento, só onde um
+   * primeiro reflexo acerta outro espelho.
+   */
+  doubleReflections: boolean;
   /** Luz que chega de todo lado. Sem ela, o que está na sombra some. */
   ambientLevel: number;
   /** Força do sol como luz direcional, separada do brilho do disco. */
@@ -151,6 +159,7 @@ export const settings: Settings = {
   lightingEnabled: true,
   shadowsEnabled: true,
   reflectionsEnabled: true,
+  doubleReflections: false,
   ambientLevel: 0.05,
   gridGlow: 0.1,
   sunLightIntensity: 0.7,

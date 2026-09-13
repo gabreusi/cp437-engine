@@ -34,6 +34,7 @@ const createOccluder = (): Occluder => ({
   material: null,
   castsShadow: true,
   ownerId: -1,
+  mirrorFaceAxis: vec3(),
 });
 
 /**
@@ -146,6 +147,7 @@ export class LightWorld {
     occluder.material = null;
     occluder.castsShadow = true;
     occluder.ownerId = ownerId;
+    set(occluder.mirrorFaceAxis, 0, 0, 0);
     return occluder;
   }
 
