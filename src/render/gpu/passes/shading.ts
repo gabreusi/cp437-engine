@@ -1,11 +1,6 @@
-import type { Framebuffer } from "../../framebuffer";
-import type { LightWorld } from "../../../light/world";
-import {
-  LIGHT_STRUCT_WGSL,
-  LightUpload,
-  OCCLUDER_STRUCT_WGSL,
-  STAR_STRUCT_WGSL,
-} from "../light-upload";
+import type {Framebuffer} from "../../framebuffer";
+import type {LightWorld} from "../../../light/world";
+import {LIGHT_STRUCT_WGSL, LightUpload, OCCLUDER_STRUCT_WGSL, STAR_STRUCT_WGSL,} from "../light-upload";
 
 /**
  * O kernel de luz (`light/shade.ts`, `light/trace.ts`, `light/sky.ts`) e a
@@ -276,6 +271,60 @@ fn traceNearestIndex(origin: vec3f, dir: vec3f, maxDistance: f32, ignoreId: f32)
   return best;
 }
 
+fn boxNormal(idx: i32, localHit: vec3f, half_: vec3f) -> vec3f {
+  let ax = abs(abs(localHit.x) - half_.x);
+  let ay = abs(abs(localHit.y) - half_.y);
+  let az = abs(abs(localHit.z) - half_.z);
+  var localNormal: vec3f;
+  if (ax <= ay && ax <= az) {
+    localNormal = vec3f(sign(localHit.x), 0.0, 0.0);
+  } else if (ay <= az) {
+    localNormal = vec3f(0.0, sign(localHit.y), 0.0);
+  } else {
+    localNormal = vec3f(0.0, 0.0, sign(localHit.z));
+  }
+  // Local -> mundo pela transposta da parte rotacional de toLocal — mesma
+  // técnica de math/mat4.ts::transformDirectionTransposed do lado CPU.
+  let occ = occluders[idx];
+  let r0 = vec3f(occ.col0.x, occ.col1.x, occ.col2.x);
+  let r1 = vec3f(occ.col0.y, occ.col1.y, occ.col2.y);
+  let r2 = vec3f(occ.col0.z, occ.col1.z, occ.col2.z);
+  return normalize(vec3f(dot(localNormal, r0), dot(localNormal, r1), dot(localNormal, r2)));
+}
+
+struct MirrorHit {
+  idx: i32,
+  distance: f32,
+  normal: vec3f,
+};
+
+/**
+ * Como traceNearestIndex, mas também devolve o ponto e a normal do
+ * acerto — o que o reflexo de corpo precisa para sombrear o ponto de
+ * verdade em vez de usar uma cor média do corpo inteiro (Occluder.tint).
+ * Recalcula a distância só para o vencedor (uma chamada extra), não por
+ * candidato testado.
+ */
+fn traceNearestHit(origin: vec3f, dir: vec3f, maxDistance: f32, ignoreId: f32) -> MirrorHit {
+  let idx = traceNearestIndex(origin, dir, maxDistance, ignoreId);
+  if (idx < 0) {
+    return MirrorHit(-1, 0.0, vec3f(0.0));
+  }
+  let occ = occluders[idx];
+  let kind = i32(occ.row0.x + 0.5);
+  let hitDistance = rayOccluder(origin, dir, idx);
+  let hitPos = origin + dir * hitDistance;
+  var normal: vec3f;
+  if (kind == OCCLUDER_SPHERE) {
+    normal = normalize(hitPos - occ.row0.yzw);
+  } else {
+    let toLocal = occluderToLocal(idx);
+    let localHit = (toLocal * vec4f(hitPos, 1.0)).xyz;
+    normal = boxNormal(idx, localHit, occ.row1.yzw);
+  }
+  return MirrorHit(idx, hitDistance, normal);
+}
+
 // ---------------------------------------------------------------------------
 // Kernel de sombreamento (light/shade.ts).
 // ---------------------------------------------------------------------------
@@ -310,6 +359,7 @@ fn shadeCore(
     let castsShadow = light.row3.x > 0.5;
     let coneCos = light.row3.y;
     let coneSoftness = light.row3.z;
+    let apertureOwnerId = light.row3.w;
 
     var lDir: vec3f;
     var distance: f32;
@@ -350,7 +400,14 @@ fn shadeCore(
     let contribution = ndotl * attenuation * intensity;
     if (contribution < shadowThreshold) { continue; }
 
-    if (shadowsAllowed && shadowsEnabled && castsShadow && shadowRays < maxShadowLights) {
+    if (apertureOwnerId >= 0.0) {
+      // Luz de bounce (ver light/mirror-bounce.ts): o teste de abertura
+      // substitui a sombra comum — o espelho que a gerou É a abertura por
+      // onde ela passa, não um bloqueio. Sem isto ela vazaria por fora da
+      // superfície real do espelho, como um segundo sol.
+      let apIdx = traceNearestIndex(origin, lDir, distance, ownerId);
+      if (apIdx < 0 || occluders[apIdx].row10.x != apertureOwnerId) { continue; }
+    } else if (shadowsAllowed && shadowsEnabled && castsShadow && shadowRays < maxShadowLights) {
       shadowRays += 1;
       if (occludedBy(origin, lDir, distance, ownerId)) { continue; }
     }
@@ -412,9 +469,20 @@ fn shadeSurface(
     var reflected = vec3f(0.0);
     var hit = false;
     if (mirror) {
-      let idx = traceNearestIndex(origin, r, MIRROR_RANGE, ownerId);
-      if (idx >= 0) {
-        reflected = occluders[idx].row6.yzw;
+      let mirrorHit = traceNearestHit(origin, r, MIRROR_RANGE, ownerId);
+      if (mirrorHit.idx >= 0) {
+        let occ = occluders[mirrorHit.idx];
+        let hitPos = origin + r * mirrorHit.distance;
+        // Um bounce: sombreia o ponto de verdade que o espelho vê, com a
+        // luz (e a sombra) de quem bate nele — não uma cor média isotrópica
+        // do corpo inteiro. shadeCore não faz reflexo, então não existe
+        // recursão: sem espelho dentro de espelho.
+        reflected = shadeCore(
+          hitPos, mirrorHit.normal, -r,
+          occ.row7.yzw, occ.row8.xyz, occ.row8.w,
+          occ.row9.x, occ.row9.y,
+          true, true, occ.row10.x
+        );
         hit = true;
       }
     }

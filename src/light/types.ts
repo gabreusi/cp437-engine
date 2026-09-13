@@ -35,6 +35,16 @@ export interface Light {
   coneCos: number;
   /** Largura da borda macia do cone, em cosseno. */
   coneSoftness: number;
+  /**
+   * `ownerId` do espelho que gerou esta luz por reflexo, ou `-1` para uma
+   * luz de verdade.
+   *
+   * Só quem enxerga esse espelho exatamente nesta direção recebe a luz —
+   * é o que contém o reflexo dentro da superfície real, em vez de vazar
+   * como um segundo sol espalhado pela cena. Ver `light/mirror-bounce.ts`
+   * e o ramo de abertura em `render/gpu/passes/shading.ts::shadeCore`.
+   */
+  apertureOwnerId: number;
 }
 
 export const OCCLUDER = {

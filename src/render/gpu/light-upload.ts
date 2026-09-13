@@ -27,7 +27,7 @@ struct Light {
   row0: vec4f, // kind, pos.x, pos.y, pos.z
   row1: vec4f, // dir.x, dir.y, dir.z, color.r
   row2: vec4f, // color.g, color.b, intensity, range
-  row3: vec4f, // castsShadow, coneCos, coneSoftness, _
+  row3: vec4f, // castsShadow, coneCos, coneSoftness, apertureOwnerId
 };`;
 
 export const OCCLUDER_STRUCT_WGSL = `
@@ -193,7 +193,7 @@ export class LightUpload {
       d[base + 12] = light.castsShadow ? 1 : 0;
       d[base + 13] = light.coneCos;
       d[base + 14] = light.coneSoftness;
-      d[base + 15] = 0;
+      d[base + 15] = light.apertureOwnerId;
     }
 
     this.occluderCount = Math.min(MAX_OCCLUDERS, world.occluderCount);

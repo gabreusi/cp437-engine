@@ -164,6 +164,14 @@ dispara, e verificar "mudei o ajuste, o que aconteceu?" mediria o quadro
 anterior. `dumpGlyphs`/`countByColor` respondem o que a GPU não responde: qual
 caractere está mesmo na célula, e que camada sumiu.
 
+**Teste visual é o usuário quem faz.** Depois de mudar renderização,
+iluminação ou qualquer coisa que só se confirma olhando a tela, não dirija o
+navegador para verificar (screenshot, `readShadedPlanes`, ficar caçando
+célula por célula) — rode `npm run typecheck`, descreva o que mudou e peça
+para o usuário conferir na tela dele. Ele vê o resultado de uma vez; caçar
+pixel por navegador automatizado é lento e não é confiável. Só dirija o
+navegador você mesmo se o usuário pedir o contrário.
+
 ## Custo
 
 180 colunas × 120 fileiras no teto (`render/viewport.ts`). O orçamento por
