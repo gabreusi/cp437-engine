@@ -1,5 +1,5 @@
 import { copyRgb } from "../../math/color";
-import { copy, type Vec3, vec3 } from "../../math/vec3";
+import { copy, set, type Vec3, vec3 } from "../../math/vec3";
 import { OCCLUDER } from "../../light/types";
 import type { LightWorld } from "../../light/world";
 import type { SurfacePen } from "../../render/shading";
@@ -64,6 +64,11 @@ export const panelKind: EntityKindDef = {
     copy(occluder.half, entity.size);
     occluder.toLocal.set(shape.toLocal);
     occluder.castsShadow = entity.castsShadow;
+    // Só a face z=+halfZ é desenhada como espelho (hatchFace(..., 2, 1, ...)
+    // em render(), abaixo) — a traseira não tem superfície própria nenhuma,
+    // só existe geometricamente para o traçado. Declarar o eixo local
+    // impede um segundo bounce de tratá-la como espelho também.
+    set(occluder.mirrorFaceAxis, 0, 0, 1);
 
     // Mesma leitura do material que `render` monta para `pen` — é o que
     // `shadeOccluders` usa para calcular a cor de verdade que um espelho vê

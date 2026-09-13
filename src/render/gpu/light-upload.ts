@@ -40,7 +40,7 @@ struct Occluder {
   row7: vec4f,  // hasMaterial, albedo.r, albedo.g, albedo.b
   row8: vec4f,  // emissive.r, emissive.g, emissive.b, emissiveStrength
   row9: vec4f,  // reflectivity, gloss, mirror, castsShadow
-  row10: vec4f, // ownerId, _, _, _
+  row10: vec4f, // ownerId, mirrorFaceAxis.x, mirrorFaceAxis.y, mirrorFaceAxis.z
 };`;
 
 export const STAR_STRUCT_WGSL = `
@@ -235,14 +235,23 @@ export class LightUpload {
       d[base + 38] = material?.mirror ? 1 : 0;
       d[base + 39] = occluder.castsShadow ? 1 : 0;
       d[base + 40] = occluder.ownerId;
-      d[base + 41] = 0;
-      d[base + 42] = 0;
-      d[base + 43] = 0;
+      d[base + 41] = occluder.mirrorFaceAxis.x;
+      d[base + 42] = occluder.mirrorFaceAxis.y;
+      d[base + 43] = occluder.mirrorFaceAxis.z;
     }
 
-    this.sky.starCount = Math.min(MAX_REFLECTED_STARS, sky.stars.length);
+    // Acima do teto, uma amostra espalhada pelo array inteiro em vez dos
+    // sempre-os-mesmos primeiros `MAX_REFLECTED_STARS` — `Sky.rebuild()` gera
+    // cada estrela pelo índice absoluto, então sem o passo o slider "Stars"
+    // não mudava nada no reflexo acima de 200 (só abaixo, quando o total
+    // encolhe). O passo cresce com o total: custo do laço no shader continua
+    // preso ao teto — só muda quais estrelas ele vê.
+    const totalStars = sky.stars.length;
+    this.sky.starCount = Math.min(MAX_REFLECTED_STARS, totalStars);
+    const starStride =
+      totalStars > 0 ? Math.max(1, Math.floor(totalStars / MAX_REFLECTED_STARS)) : 1;
     for (let i = 0; i < this.sky.starCount; i += 1) {
-      const star = sky.stars[i]!;
+      const star = sky.stars[i * starStride]!;
       const d = this.starData;
       const base = i * STAR_STRIDE;
       d[base + 0] = star.x;

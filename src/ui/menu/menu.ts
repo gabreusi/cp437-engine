@@ -8,14 +8,8 @@ import type { World } from "../../scene/world";
 import type { Cursor } from "../cursor";
 import type { Manipulator } from "../manipulator";
 import { type MenuLayout, computeLayout, drawMenu } from "./draw";
-import {
-  type MenuGroup,
-  type MenuItem,
-  adjustItem,
-  choiceArrowDirection,
-  isFocusable,
-  sliderRatioValue,
-} from "./model";
+import { ItemList } from "./item-list";
+import type { MenuGroup } from "./model";
 
 /**
  * O menu de pausa da engine.
@@ -43,16 +37,10 @@ export class Menu {
   open = false;
 
   private groupIndex = 0;
-  private itemIndex = 0;
-  private scroll = 0;
   private onGroups = true;
-  private hoverItem = -1;
 
-  private items: MenuItem[] = [];
+  private readonly itemList = new ItemList();
   private layout: MenuLayout | null = null;
-
-  /** Índice do slider sendo arrastado, ou -1. */
-  private draggingSlider = -1;
 
   /** Onde o ponteiro estava, em células, para as setas saberem quem realçar. */
   private hoverCol = -1;
@@ -93,7 +81,7 @@ export class Menu {
     }
 
     if (!this.open) {
-      this.draggingSlider = -1;
+      this.itemList.release();
       // O manipulador é compartilhado com o editor, que continua
       // trabalhando com o menu fechado: soltá-lo aqui, todo quadro,
       // cancelaria o arrasto de quem está com o objeto na mão. Quem abre
@@ -101,7 +89,7 @@ export class Menu {
       return;
     }
 
-    this.items = this.groups[this.groupIndex]?.items() ?? [];
+    this.itemList.setItems(this.groups[this.groupIndex]?.items() ?? []);
     this.layout = computeLayout(viewport);
     this.manipulator.update(
       this.editing ? this.world.selected : null,
@@ -111,7 +99,7 @@ export class Menu {
 
     this.handlePointer(events, viewport, camera, rasterizer, lights);
     this.handleKeys(events);
-    this.clampFocus();
+    this.itemList.clampFocus(this.layout.visibleRows);
   }
 
   private setOpen(open: boolean): void {
@@ -122,9 +110,9 @@ export class Menu {
     this.input.hideSystemPointer(open);
     if (open) {
       this.input.release();
-      this.ensureFocusable(1);
+      this.itemList.ensureFocusable(1);
     } else {
-      this.draggingSlider = -1;
+      this.itemList.release();
       this.manipulator.release();
     }
   }
@@ -139,7 +127,19 @@ export class Menu {
         this.handleGroupKey(code);
         continue;
       }
-      this.handleItemKey(code, events.shift);
+
+      if (!this.itemList.handleKeyCode(code, events.shift, () => this.refreshItems())) {
+        this.onGroups = true;
+        continue;
+      }
+
+      if (
+        (code === "Delete" || code === "Backspace") &&
+        this.editing &&
+        this.world.selectedId !== null
+      ) {
+        this.world.remove(this.world.selectedId);
+      }
     }
   }
 
@@ -158,114 +158,20 @@ export class Menu {
       case "Enter":
       case "Tab":
         this.onGroups = false;
-        this.ensureFocusable(1);
+        this.itemList.ensureFocusable(1);
         break;
     }
   }
 
-  private handleItemKey(code: string, shift: boolean): void {
-    const item = this.items[this.itemIndex];
-
-    switch (code) {
-      case "ArrowUp":
-        this.moveFocus(-1);
-        return;
-      case "ArrowDown":
-        this.moveFocus(1);
-        return;
-      case "Tab":
-        this.onGroups = true;
-        return;
-      case "ArrowLeft":
-        if (item === undefined || !adjustItem(item, -1, shift))
-          this.onGroups = true;
-        return;
-      case "ArrowRight":
-        if (item !== undefined) adjustItem(item, 1, shift);
-        return;
-      case "Enter":
-      case "Space":
-        if (item !== undefined) this.activate(item);
-        return;
-      case "Delete":
-      case "Backspace":
-        if (this.editing && this.world.selectedId !== null) {
-          this.world.remove(this.world.selectedId);
-        }
-        return;
-    }
-  }
-
-  private activate(item: MenuItem): void {
-    switch (item.kind) {
-      case "toggle":
-        item.set(!item.get());
-        return;
-      case "choice":
-        adjustItem(item, 1);
-        return;
-      case "action":
-        item.run();
-        // A ação pode ter criado ou apagado um objeto: a lista mudou.
-        this.items = this.groups[this.groupIndex]?.items() ?? [];
-        this.clampFocus();
-        return;
-      case "entity":
-        item.select();
-        return;
-    }
-  }
-
-  private moveFocus(direction: number): void {
-    this.itemIndex += direction;
-    this.ensureFocusable(direction);
-  }
-
-  /** Anda até cair num item que aceita foco. Títulos são pulados. */
-  private ensureFocusable(direction: number): void {
-    const step = direction >= 0 ? 1 : -1;
-    for (let guard = 0; guard <= this.items.length; guard += 1) {
-      if (this.itemIndex < 0) {
-        this.itemIndex = 0;
-        if (this.items.every((item) => !isFocusable(item))) return;
-      }
-      if (this.itemIndex >= this.items.length) {
-        this.itemIndex = this.items.length - 1;
-      }
-
-      const item = this.items[this.itemIndex];
-      if (item === undefined || isFocusable(item)) return;
-      this.itemIndex += step;
-    }
-  }
-
   private resetItems(): void {
-    this.items = this.groups[this.groupIndex]?.items() ?? [];
-    this.itemIndex = 0;
-    this.scroll = 0;
-    this.ensureFocusable(1);
+    this.itemList.setItems(this.groups[this.groupIndex]?.items() ?? []);
+    this.itemList.resetFocus(1);
   }
 
-  /** Mantém o foco dentro da lista e visível na janela de rolagem. */
-  private clampFocus(): void {
-    if (this.items.length === 0) {
-      this.itemIndex = 0;
-      this.scroll = 0;
-      return;
-    }
-    this.itemIndex = Math.max(
-      0,
-      Math.min(this.items.length - 1, this.itemIndex),
-    );
-
-    const rows = this.layout?.visibleRows ?? this.items.length;
-    if (this.itemIndex < this.scroll) this.scroll = this.itemIndex;
-    if (this.itemIndex >= this.scroll + rows)
-      this.scroll = this.itemIndex - rows + 1;
-    this.scroll = Math.max(
-      0,
-      Math.min(this.scroll, Math.max(0, this.items.length - rows)),
-    );
+  /** A ação pode ter criado ou apagado um objeto: a lista do grupo mudou. */
+  private refreshItems(): void {
+    this.itemList.setItems(this.groups[this.groupIndex]?.items() ?? []);
+    this.itemList.clampFocus(this.layout?.visibleRows ?? 0);
   }
 
   // ------------------------------------------------------------------ mouse
@@ -284,25 +190,14 @@ export class Menu {
     const rowIndex = this.cursor.row;
 
     if (!events.down) {
-      this.draggingSlider = -1;
+      this.itemList.release();
       this.manipulator.release();
     }
 
     // Um slider agarrado continua respondendo à coluna do cursor sozinha,
     // não importa a linha: exigir a linha certa é o que fazia o arrasto
     // lateral "travar" ao menor tremor vertical do mouse.
-    if (this.draggingSlider >= 0 && events.down) {
-      const item = this.items[this.draggingSlider];
-      if (item !== undefined && item.kind === "slider") {
-        item.set(
-          sliderRatioValue(
-            item,
-            this.cursor.exactCol,
-            layout.trackCol,
-            layout.trackWidth,
-          ),
-        );
-      }
+    if (events.down && this.itemList.continueDrag(this.cursor.exactCol, layout)) {
       return;
     }
 
@@ -317,7 +212,7 @@ export class Menu {
       return;
     }
 
-    this.hoverItem = -1;
+    this.itemList.hoverItem = -1;
     this.hoverCol = -1;
     this.hoverRow = -1;
     if (this.editing) {
@@ -342,7 +237,7 @@ export class Menu {
     // Coluna dos grupos.
     if (col <= layout.col + layout.width - layout.itemWidth - 3) {
       const index = row - layout.groupFirstRow;
-      this.hoverItem = -1;
+      this.itemList.hoverItem = -1;
       if (events.pressed && index >= 0 && index < this.groups.length) {
         this.groupIndex = index;
         this.onGroups = true;
@@ -351,58 +246,15 @@ export class Menu {
       return;
     }
 
-    const index = this.scroll + (row - layout.itemFirstRow);
-    const item = this.items[index];
-    this.hoverItem = item !== undefined && isFocusable(item) ? index : -1;
-
-    if (events.wheel !== 0) {
-      this.scroll += events.wheel;
-      this.scroll = Math.max(
-        0,
-        Math.min(
-          this.scroll,
-          Math.max(0, this.items.length - layout.visibleRows),
-        ),
-      );
-      return;
-    }
-
-    if (item === undefined || !isFocusable(item)) return;
-
-    const onTrack = item.kind === "slider" && col >= layout.trackCol - 1;
-
-    if (events.pressed) {
-      this.itemIndex = index;
-      this.onGroups = false;
-
-      const choiceDir = choiceArrowDirection(
-        item,
-        col,
-        layout.trackCol,
-        layout.trackWidth,
-      );
-
-      if (choiceDir !== 0) {
-        adjustItem(item, choiceDir);
-      } else if (onTrack) {
-        this.draggingSlider = index;
-        // Escrever já no clique, e não só ao arrastar: numa trilha, clicar em
-        // um ponto significa "vá para cá". Exigir arrasto faria um clique
-        // simples não fazer nada, que é o defeito mais chato de slider. A
-        // continuação do arrasto, coluna a coluna, é tratada em
-        // `handlePointer` — sem depender de `item`/`index` desta linha.
-        item.set(
-          sliderRatioValue(
-            item,
-            this.cursor.exactCol,
-            layout.trackCol,
-            layout.trackWidth,
-          ),
-        );
-      } else if (item.kind !== "slider") {
-        this.activate(item);
-      }
-    }
+    const focused = this.itemList.handlePointer(
+      events,
+      layout,
+      col,
+      this.cursor.exactCol,
+      row,
+      () => this.refreshItems(),
+    );
+    if (focused) this.onGroups = false;
   }
 
   /**
@@ -479,12 +331,12 @@ export class Menu {
 
     drawMenu(framebuffer, layout, {
       groups: this.groups,
-      items: this.items,
+      items: this.itemList.current,
       groupIndex: this.groupIndex,
-      itemIndex: this.itemIndex,
-      scroll: this.scroll,
+      itemIndex: this.itemList.itemIndex,
+      scroll: this.itemList.scroll,
       onGroups: this.onGroups,
-      hoverItem: this.hoverItem,
+      hoverItem: this.itemList.hoverItem,
     });
   }
 }

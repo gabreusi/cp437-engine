@@ -11,6 +11,7 @@
  * mesmos literais hex, agora desempacotadas em 0..1 para a matemática de luz.
  */
 import { fromHex, type Rgb } from "../math/color";
+import { glsl } from "./sky-colors";
 
 /**
  * Os 256 glifos do atlas: a code page 437 original do IBM PC, índice a
@@ -134,6 +135,21 @@ export const COLOR = {
   GRID_MID: fromHex("#109fbe"),
   GRID_FAR: fromHex("#0a5a72"),
 } as const;
+
+/**
+ * A grade e o horizonte, como declarações WGSL — para `reflectGround`/
+ * `skyRadiance` (`render/gpu/passes/shading.ts`) desenharem a mesma banda por
+ * distância e a mesma linha de horizonte que a cena real mostra
+ * (`groundBand`/`Sky.drawHorizon`), em vez da cor plana e do silêncio que um
+ * espelho tinha antes. Mesmo mecanismo de `SKY_GLSL` (`render/sky-colors.ts`):
+ * uma cor usada por CPU e shader mora num só lugar.
+ */
+export const GRID_GLSL: string = [
+  glsl("GRID_NEAR", COLOR.GRID_NEAR),
+  glsl("GRID_MID", COLOR.GRID_MID),
+  glsl("GRID_FAR", COLOR.GRID_FAR),
+  glsl("HORIZON", COLOR.HORIZON),
+].join("\n");
 
 /** As oito faixas do sol, do topo para a base. */
 export const SUN_SHADES: readonly Rgb[] = [

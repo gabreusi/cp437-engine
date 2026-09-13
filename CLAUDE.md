@@ -148,7 +148,12 @@ espaço. Ver "O nome" no README.
 
 ## Persistência e estado
 
-- `settings` (`config.ts`) = preferência de quem olha. **Não é salvo.**
+- `settings` (`config.ts`) = preferência de quem olha. Salvo em `localStorage`
+  sob `cp437-engine/settings`, automaticamente a cada mudança de controle no
+  menu (`saveSettings()`, chamado pelos helpers `slider`/`toggle` de
+  `ui/menu/schema.ts`). No `loadSettings()` (chamado uma vez, em `main.ts`,
+  antes de qualquer leitura de `settings`), o salvo é mesclado sobre uma cópia
+  congelada dos defaults — mesmo espírito do merge de `World.load()` abaixo.
 - `World` (`scene/world.ts`) = conteúdo. Salvo em `localStorage` sob
   `cp437-engine/scene`; `current` (posição animada) é derivado e não serializa.
   No `load`, o salvo é mesclado sobre `createEntity(kind, defaults())` — campos

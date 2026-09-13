@@ -62,17 +62,21 @@ export class Ground implements Renderable {
   };
 
   /**
-   * Publica o material que um espelho vê do chão, antes de qualquer
-   * `render()` do quadro — ver `LightWorld.groundMaterial` e o comentário em
-   * `reflectionMaterial`. Cor fixa e plausível (`COLOR.GRID_MID`, a mesma
-   * faixa que `groundBand` usa a meia distância): reproduzir a variação por
-   * distância/textura da grade aqui exigiria a câmera, que `shadeSurface`
-   * não recebe, só para um reflexo de um bounce só.
+   * Publica o que um espelho vê do chão, antes de qualquer `render()` do
+   * quadro — ver `LightWorld.groundMaterial` e o comentário em
+   * `reflectionMaterial`. O albedo aqui (`COLOR.GRID_MID`) não é mais o que
+   * `reflectGround` mostra de verdade: o próprio WGSL
+   * (`render/gpu/passes/shading.ts`) já bandeia a cor por distância
+   * (`groundBandColor`) e desenha o padrão da grade em cima
+   * (`groundLineMask`, a partir de `gridSize`) — a mesma variação e o mesmo
+   * traçado que `groundBand`/`Ground.render` dão à grade de verdade.
+   * `emissiveStrength` é o que resta de verdade daqui: a força do neon nas
+   * linhas refletidas, igual ao que `createGroundPen` usa na grade real.
    */
   contribute(context: RenderContext): void {
     const material = this.reflectionMaterial;
     copyRgb(material.albedo, COLOR.GRID_MID);
-    material.emissiveStrength = 0;
+    material.emissiveStrength = settings.gridGlow;
     material.reflectivity = settings.groundReflectivity;
     material.gloss = settings.groundGloss;
     material.mirror = true;
@@ -161,15 +165,16 @@ export class Ground implements Renderable {
     surface.area = true;
     // Piso "cru": o chão pode devolver espaço e sumir — ver `DeferredSurface.variant`.
     surface.variant = true;
-    // O vazio entre linhas é metade do estilo: com ambiente somado, toda
-    // célula passaria do limiar e a leitura de grade sumiria — mesmo motivo
-    // de sempre, ver `ShadeOptions.ambient` em `light/shade.ts`.
-    surface.ambient = false;
-    // O lóbulo do céu devolve uma lavagem quase uniforme na superfície
-    // horizontal inteira: o especular das luzes (que já entra sozinho,
-    // fora deste interruptor) desenha a coluna do sol, e é só isso que o
-    // preenchimento quer mostrar — mesmo com reflexo ligado no ajuste global.
-    surface.reflections = false;
+    // Ambiente e reflexo ligados, como qualquer outra superfície da cena —
+    // até aqui os dois ficavam desligados só no preenchimento, e o vão entre
+    // linhas lia mais "apagado" que a própria linha sob a mesma luz (ver
+    // TODO "grid/chão destoa do resto"). Se o lóbulo de céu (`skyRadiance`)
+    // voltar a lavar o preenchimento numa cor quase uniforme — o motivo
+    // original do desligamento —, a correção é pesar menos o lóbulo para
+    // esta superfície (o mesmo `rampParams.w`/`sunWashIntensity` que já
+    // pondera `wash`/`glow` em `skyRadiance`), não desligar de novo.
+    surface.ambient = true;
+    surface.reflections = true;
 
     // O chão fica de um lado só do horizonte, e qual lado depende de a
     // câmera estar acima ou abaixo do plano. Começar na fileira certa evita

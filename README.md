@@ -560,5 +560,7 @@ ajuste, o que aconteceu?" mede o quadro anterior e conclui que nada mudou.
 Isto é a engine, não o jogo. Não há colisão nem estado de jogo, e a simulação não
 faz nada além de mover a câmera e girar os orbes. A costura para isso é
 `Renderable` e o `World`, que é onde o `gameState` já começou a existir: os
-ajustes de `settings` são preferência de quem olha, a cena é conteúdo, e só a
-cena é salva.
+ajustes de `settings` são preferência de quem olha, a cena é conteúdo — a
+distinção que importa é essa, não mais quem é salvo: os dois são, cada um sob
+sua própria chave de `localStorage`, e cada um mesclado sobre seus próprios
+defaults ao carregar.

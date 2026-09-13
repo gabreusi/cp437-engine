@@ -2,6 +2,7 @@ import type {Framebuffer} from "../../framebuffer";
 import type {LightWorld} from "../../../light/world";
 import {LIGHT_STRUCT_WGSL, LightUpload, OCCLUDER_STRUCT_WGSL, STAR_STRUCT_WGSL,} from "../light-upload";
 import {SKY_GLSL, toWgslConstants} from "../../sky-colors";
+import {GRID_GLSL} from "../../palette";
 
 /**
  * O kernel de luz (sombra e espelho vêm de `light/trace.ts`; o modelo de céu
@@ -28,8 +29,8 @@ ${STAR_STRUCT_WGSL}
 
 struct Uniforms {
   ambient: vec4f,         // r,g,b,_
-  cameraPos: vec4f,       // x,y,z,_
-  sunDir: vec4f,          // x,y,z,_
+  cameraPos: vec4f,       // x,y,z, gridSize
+  sunDir: vec4f,          // x,y,z, doubleReflections
   sunColor: vec4f,        // r,g,b,_
   skyParams: vec4f,       // sunIntensity, skyIntensity, sunGlow, horizonGlow
   skyParams2: vec4f,      // sunSpread, noiseSeed, hasGround, groundMirror
@@ -87,6 +88,11 @@ const MIN_LOBE = 1.0;
 const STAR_REFLECT_COS_THRESHOLD = 0.9997;
 const STAR_REFLECT_STRENGTH = 0.6;
 
+// Mesmo peso de Sky.drawHorizon (scene/sky.ts, HORIZON_TINT_WEIGHT).
+const HORIZON_TINT_WEIGHT = 0.85;
+// Meia-largura angular da linha do horizonte, em dir.y. Calibrado a olho.
+const HORIZON_LINE_WIDTH = 0.012;
+
 const CONTRAST_EXPONENT = 1.6;
 const JITTER_CELL = 0.5;
 const IRREGULAR_JITTER = 0.34;
@@ -98,6 +104,10 @@ const AREA_LUT_LEVELS = 256.0;
 // segunda cópia hand-typed: declara VOID_COLOR, PINK, CYAN, PURPLE, HAZE,
 // WASH_WEIGHT, GLOW_WEIGHT, BAND_WEIGHT.
 ${toWgslConstants(SKY_GLSL)}
+
+// Mesma fonte que render/palette.ts::COLOR (GRID_NEAR/MID/FAR), para
+// reflectGround bandear por distância sem uma segunda cópia da cor.
+${toWgslConstants(GRID_GLSL)}
 
 // ---------------------------------------------------------------------------
 // Ruído (math/noise.ts).
@@ -138,6 +148,14 @@ fn jitterAt(p: vec3f) -> f32 {
 // As três camadas do meio são luz do sol espalhada, e é o sol (scene/sun.ts)
 // quem diz o quanto: sunGlow, horizonGlow e sunSpread chegam prontos no
 // modelo de céu. Só o vazio é constante — ele não é luz de ninguém.
+//
+// A linha do horizonte (Sky.drawHorizon, scene/sky.ts) entra aqui também,
+// como uma faixa fina centrada em dir.y == 0 — pura direção, sem paralaxe
+// (mesmo invariante do céu inteiro), então vale para qualquer raio de
+// reflexo, não só a visão direta. A cor usa u.sunColor (o disco, sempre
+// disponível aqui) em vez de sunLightColor (a cor de verdade da luz, que
+// Sky.drawHorizon usa mas não chega a este shader) — aproxima o mesmo
+// aquecimento perto do poente sem crescer o uniform só por isto.
 // ---------------------------------------------------------------------------
 fn skyRadiance(dir: vec3f, gloss: f32) -> vec3f {
   let sunDir = u.sunDir.xyz;
@@ -194,6 +212,11 @@ fn skyRadiance(dir: vec3f, gloss: f32) -> vec3f {
     let ground = min(1.0, -dir.y * 4.0);
     c += (HAZE * 0.25 - c) * ground;
   }
+
+  let horizonLineGlow = min(1.0, horizon) * HORIZON_TINT_WEIGHT;
+  let horizonLineColor = mix(HORIZON, u.sunColor.xyz, horizonLineGlow);
+  let horizonLine = 1.0 - smoothstep(0.0, HORIZON_LINE_WIDTH, abs(dir.y));
+  c += (horizonLineColor - c) * horizonLine;
 
   return c * skyIntensity;
 }
@@ -427,7 +450,22 @@ fn traceNearestIndex(origin: vec3f, dir: vec3f, maxDistance: f32, ignoreId: f32)
   return best;
 }
 
-fn boxNormal(idx: i32, localHit: vec3f, half_: vec3f) -> vec3f {
+struct BoxFaceHit {
+  normal: vec3f,
+  mirrorAllowed: bool,
+}
+
+/**
+ * Normal da face da caixa acertada, e se essa face tem permissão de agir
+ * como espelho para um segundo bounce (shadeSurface). occ.row10.yzw é o
+ * eixo local declarado por quem criou o occluder (mirrorFaceAxis,
+ * light/types.ts) — vetor zero não restringe nada (ex.: monólito, qualquer
+ * face voltada para quem olha reflete igual); um eixo de verdade só libera
+ * a face com essa normal local, e é isso que impede a traseira do painel
+ * (uma placa fina, espelho só de um lado) de ser tratada como espelho ao
+ * ser acertada por um raio que vem de trás.
+ */
+fn boxFaceHit(idx: i32, localHit: vec3f, half_: vec3f) -> BoxFaceHit {
   let ax = abs(abs(localHit.x) - half_.x);
   let ay = abs(abs(localHit.y) - half_.y);
   let az = abs(abs(localHit.z) - half_.z);
@@ -439,19 +477,27 @@ fn boxNormal(idx: i32, localHit: vec3f, half_: vec3f) -> vec3f {
   } else {
     localNormal = vec3f(0.0, 0.0, sign(localHit.z));
   }
+
+  let occ = occluders[idx];
+  let mirrorFaceAxis = occ.row10.yzw;
+  let restricted = dot(mirrorFaceAxis, mirrorFaceAxis) > 0.5;
+  let mirrorAllowed = !restricted || dot(localNormal, mirrorFaceAxis) > 0.5;
+
   // Local -> mundo pela transposta da parte rotacional de toLocal — mesma
   // técnica de math/mat4.ts::transformDirectionTransposed do lado CPU.
-  let occ = occluders[idx];
   let r0 = vec3f(occ.col0.x, occ.col1.x, occ.col2.x);
   let r1 = vec3f(occ.col0.y, occ.col1.y, occ.col2.y);
   let r2 = vec3f(occ.col0.z, occ.col1.z, occ.col2.z);
-  return normalize(vec3f(dot(localNormal, r0), dot(localNormal, r1), dot(localNormal, r2)));
+  let worldNormal = normalize(vec3f(dot(localNormal, r0), dot(localNormal, r1), dot(localNormal, r2)));
+
+  return BoxFaceHit(worldNormal, mirrorAllowed);
 }
 
 struct MirrorHit {
   idx: i32,
   distance: f32,
   normal: vec3f,
+  mirrorAllowed: bool,
 };
 
 /**
@@ -464,21 +510,24 @@ struct MirrorHit {
 fn traceNearestHit(origin: vec3f, dir: vec3f, maxDistance: f32, ignoreId: f32) -> MirrorHit {
   let idx = traceNearestIndex(origin, dir, maxDistance, ignoreId);
   if (idx < 0) {
-    return MirrorHit(-1, 0.0, vec3f(0.0));
+    return MirrorHit(-1, 0.0, vec3f(0.0), false);
   }
   let occ = occluders[idx];
   let kind = i32(occ.row0.x + 0.5);
   let hitDistance = rayOccluder(origin, dir, idx);
   let hitPos = origin + dir * hitDistance;
   var normal: vec3f;
+  var mirrorAllowed = true;
   if (kind == OCCLUDER_SPHERE) {
     normal = normalize(hitPos - occ.row0.yzw);
   } else {
     let toLocal = occluderToLocal(idx);
     let localHit = (toLocal * vec4f(hitPos, 1.0)).xyz;
-    normal = boxNormal(idx, localHit, occ.row1.yzw);
+    let faceHit = boxFaceHit(idx, localHit, occ.row1.yzw);
+    normal = faceHit.normal;
+    mirrorAllowed = faceHit.mirrorAllowed;
   }
-  return MirrorHit(idx, hitDistance, normal);
+  return MirrorHit(idx, hitDistance, normal, mirrorAllowed);
 }
 
 // ---------------------------------------------------------------------------
@@ -588,6 +637,36 @@ fn shadeCore(
   return color;
 }
 
+// Fim das bandas da grade real (groundBand, render/shading.ts), em
+// unidades de mundo ao longo do raio de reflexo — não em fogAmount, que
+// depende de viewDistance/fogDensity, uniforms que não chegam a este
+// shader só para um bounce de reflexo. Valores calibrados a olho para bater
+// perto do ajuste padrão (300/0.6): um espelho tem que mostrar a mesma
+// variação por distância que o chão de verdade, não a cor exata dele.
+const GROUND_BAND_NEAR_T = 110.0;
+const GROUND_BAND_FAR_T = 220.0;
+
+fn groundBandColor(t: f32) -> vec3f {
+  let toMid = smoothstep(0.0, GROUND_BAND_NEAR_T, t);
+  let toFar = smoothstep(GROUND_BAND_NEAR_T, GROUND_BAND_FAR_T, t);
+  return mix(mix(GRID_NEAR, GRID_MID, toMid), GRID_FAR, toFar);
+}
+
+// Meia-largura da linha, em fração de gridSize. Calibrado a olho.
+const GROUND_LINE_FRACTION = 0.05;
+
+// 1 em cima de uma linha da grade real (múltiplo de gridSize em X ou Z),
+// suavizando para 0 no vão — mesma grade ancorada em posição de mundo que
+// Ground.render desenha de verdade (baseX/baseZ só escolhem por onde ela
+// começa a ser emitida, as linhas em si estão em todo múltiplo de
+// gridSize), então um espelho mostra o mesmo padrão, não uma cor lisa.
+fn groundLineMask(worldX: f32, worldZ: f32, gridSize: f32) -> f32 {
+  let half = gridSize * GROUND_LINE_FRACTION;
+  let dx = abs(fract(worldX / gridSize + 0.5) - 0.5) * gridSize;
+  let dz = abs(fract(worldZ / gridSize + 0.5) - 0.5) * gridSize;
+  return 1.0 - smoothstep(0.0, half, min(dx, dz));
+}
+
 fn reflectGround(origin: vec3f, dir: vec3f) -> vec4f {
   // .a > 0.5 sinaliza acerto — WGSL não tem saída "out bool" barata aqui.
   if (u.skyParams2.z < 0.5 || dir.y >= 0.0) { return vec4f(0.0); }
@@ -595,14 +674,35 @@ fn reflectGround(origin: vec3f, dir: vec3f) -> vec4f {
   if (!(t > SHADOW_BIAS) || t >= MIRROR_RANGE) { return vec4f(0.0); }
 
   let hitPos = vec3f(origin.x + dir.x * t, 0.0, origin.z + dir.z * t);
+  let gridSize = max(0.1, u.cameraPos.w);
+  let line = groundLineMask(hitPos.x, hitPos.z, gridSize);
+  let albedo = groundBandColor(t);
+  // A linha é neon (emite na própria cor), o vão só reflete — mesma
+  // distinção de createGroundPen (render/shading.ts).
+  let emissive = albedo * u.groundEmissive.w * line;
   let view = -dir;
   let shaded = shadeCore(
     hitPos, vec3f(0.0, 1.0, 0.0), view,
-    u.groundAlbedo.xyz, u.groundEmissive.xyz, u.groundEmissive.w,
+    albedo, emissive, 1.0,
     0.0, u.groundGloss.x,
     true, false, -1.0
   );
   return vec4f(shaded, 1.0);
+}
+
+/**
+ * O que um raio vê ao não acertar nenhum occluder: chão, se ele cruzar o
+ * plano, senão céu — versão enxuta do fallback de shadeSurface, sem o disco
+ * do sol literal (glyphOverride), que só faz sentido para a própria
+ * superfície espelhada, não para um segundo bounce dentro dela. Usada só
+ * pelo segundo nível de reflexo, abaixo.
+ */
+fn reflectedEnvironment(origin: vec3f, dir: vec3f, gloss: f32) -> vec3f {
+  let ground = reflectGround(origin, dir);
+  if (ground.w > 0.5) {
+    return ground.xyz;
+  }
+  return skyRadiance(dir, gloss);
 }
 
 /**
@@ -643,13 +743,57 @@ fn shadeSurface(
         // Um bounce: sombreia o ponto de verdade que o espelho vê, com a
         // luz (e a sombra) de quem bate nele — não uma cor média isotrópica
         // do corpo inteiro. shadeCore não faz reflexo, então não existe
-        // recursão: sem espelho dentro de espelho.
+        // recursão de verdade (WGSL não permite função recursiva); o bounce
+        // extra logo abaixo é a mesma conta escrita à mão mais uma vez, não
+        // um laço genérico — só "espelho dentro de espelho", um nível.
         reflected = shadeCore(
           hitPos, mirrorHit.normal, -r,
           occ.row7.yzw, occ.row8.xyz, occ.row8.w,
           occ.row9.x, occ.row9.y,
           true, true, occ.row10.x
         );
+
+        // Segundo nível, opt-in (u.sunDir.w — "Double Reflections" no menu):
+        // se o que este espelho mostra é ele mesmo um espelho, traça a
+        // reflexão dele também e soma, ponderada pela reflectividade dele —
+        // é o "esfera refletida no espelho ao lado também mostra o que a
+        // esfera reflete" que o primeiro bounce sozinho não alcança.
+        // mirrorHit.mirrorAllowed é o que barra a traseira de uma placa
+        // fina (o painel): a face errada nunca conta como espelho aqui.
+        let occMirror = occ.row9.z > 0.5 && mirrorHit.mirrorAllowed;
+        let occReflectivity = occ.row9.x;
+        if (u.sunDir.w > 0.5 && occMirror && occReflectivity > 0.0) {
+          let n2 = mirrorHit.normal;
+          let ndotv2 = dot(n2, -r);
+          let r2 = n2 * (2.0 * ndotv2) - (-r);
+          let origin2 = hitPos + n2 * SHADOW_BIAS;
+
+          // traceNearestHit só recebe um ignoreId — exclui o objeto
+          // intermediário (occ), não o espelho original que chamou
+          // shadeSurface. Sem isto, um objeto fino (o painel é uma caixa
+          // rasa) faz o segundo raio, saindo quase raspando a própria
+          // superfície, acertar de volta o espelho original num ângulo
+          // degenerado — a grade "entortando como esfera" na traseira do
+          // painel era exatamente isto: o segundo bounce se vendo a si
+          // mesmo por um caminho indireto. Descartar esse acerto (cair no
+          // chão/céu, como se nada tivesse sido atingido) é mais barato e
+          // mais correto do que tentar achar o próximo atrás dele.
+          var reflected2 = vec3f(0.0);
+          let mirrorHit2 = traceNearestHit(origin2, r2, MIRROR_RANGE, occ.row10.x);
+          if (mirrorHit2.idx >= 0 && occluders[mirrorHit2.idx].row10.x != ownerId) {
+            let occ2 = occluders[mirrorHit2.idx];
+            let hitPos2 = origin2 + r2 * mirrorHit2.distance;
+            reflected2 = shadeCore(
+              hitPos2, mirrorHit2.normal, -r2,
+              occ2.row7.yzw, occ2.row8.xyz, occ2.row8.w,
+              occ2.row9.x, occ2.row9.y,
+              true, true, occ2.row10.x
+            );
+          } else {
+            reflected2 = reflectedEnvironment(origin2, r2, occ.row9.y);
+          }
+          reflected += reflected2 * occReflectivity;
+        }
         hit = true;
       }
     }
@@ -1128,6 +1272,8 @@ export class ShadingPass {
       sunSliceGap: number;
       sunWashSize: number;
       sunWashIntensity: number;
+      gridSize: number;
+      doubleReflections: boolean;
     },
   ): void {
     if (this.pipeline === null || this.bindGroup === null) return;
@@ -1179,14 +1325,16 @@ export class ShadingPass {
       sunSliceGap: number;
       sunWashSize: number;
       sunWashIntensity: number;
+      gridSize: number;
+      doubleReflections: boolean;
     },
   ): void {
     const d = this.uniformData;
     const { sky } = this.lights;
     let o = 0;
     d[o++] = this.lights.ambientR; d[o++] = this.lights.ambientG; d[o++] = this.lights.ambientB; d[o++] = 0;
-    d[o++] = cameraX; d[o++] = cameraY; d[o++] = cameraZ; d[o++] = 0;
-    d[o++] = sky.sunDirX; d[o++] = sky.sunDirY; d[o++] = sky.sunDirZ; d[o++] = 0;
+    d[o++] = cameraX; d[o++] = cameraY; d[o++] = cameraZ; d[o++] = options.gridSize;
+    d[o++] = sky.sunDirX; d[o++] = sky.sunDirY; d[o++] = sky.sunDirZ; d[o++] = options.doubleReflections ? 1 : 0;
     d[o++] = sky.sunColorR; d[o++] = sky.sunColorG; d[o++] = sky.sunColorB; d[o++] = 0;
     d[o++] = sky.sunIntensity; d[o++] = sky.intensity; d[o++] = sky.sunGlow; d[o++] = sky.horizonGlow;
     d[o++] = sky.sunSpread; d[o++] = this.noiseSeed; d[o++] = sky.hasGround ? 1 : 0; d[o++] = sky.groundMirror ? 1 : 0;

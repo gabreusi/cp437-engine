@@ -15,6 +15,8 @@ export const ENTITY = {
   PANEL: "panel",
   /** Cone de luz configurável: alcance, cor e abertura do feixe. */
   SPOTLIGHT: "spotlight",
+  /** Esfera sólida, sem luz própria: recebe luz, espelha e projeta sombra. */
+  SPHERE: "sphere",
 } as const;
 
 export type EntityKind = (typeof ENTITY)[keyof typeof ENTITY];

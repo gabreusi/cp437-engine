@@ -95,6 +95,19 @@ export interface Occluder {
   castsShadow: boolean;
   /** Quem pediu o occluder. É por aqui que o clique seleciona um objeto. */
   ownerId: number;
+  /**
+   * Caixa: em que direção do espaço local o reflexo de segundo nível
+   * (`shadeSurface`, `render/gpu/passes/shading.ts`) tem permissão de
+   * mostrar o que este corpo reflete. Vetor zero (o padrão) não restringe
+   * nada — um monólito é sólido de verdade, qualquer face voltada para
+   * quem olha reflete igual. Um vetor de eixo (`(0,0,1)`, por exemplo)
+   * restringe à face com essa normal local: o painel é uma placa fina de
+   * um lado só, e sem isto a traseira dele — que nunca é desenhada como
+   * superfície própria, só existe geometricamente para o traçado —
+   * replicava o reflexo da frente de um jeito degenerado ao ser acertada
+   * por um segundo bounce. Esferas ignoram isto (sempre sem restrição).
+   */
+  mirrorFaceAxis: Vec3;
 }
 
 /**
