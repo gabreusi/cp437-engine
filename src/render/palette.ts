@@ -10,8 +10,8 @@
  * nenhuma. As cores do cenário são exatamente as mesmas de antes, escritas nos
  * mesmos literais hex, agora desempacotadas em 0..1 para a matemática de luz.
  */
-import { fromHex, type Rgb } from "../math/color";
-import { glsl } from "./sky-colors";
+import {fromHex, type Rgb} from "../math/color";
+import {glsl} from "./sky-colors";
 
 /**
  * Os 256 glifos do atlas: a code page 437 original do IBM PC, índice a
@@ -46,6 +46,9 @@ export const GLYPH = {
   ARROW_VERTICAL: 18,
   ARROW_UP: 30,
   ARROW_DOWN: 31,
+
+  BRACKET_LEFT: 91,
+  BRACKET_RIGHT: 93,
 
   BLOCK_LIGHT: 176,
   BLOCK_MEDIUM: 177,

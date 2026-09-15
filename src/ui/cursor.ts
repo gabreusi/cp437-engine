@@ -1,10 +1,10 @@
-import type { Input, UiEvents } from "../core/input";
-import type { Framebuffer } from "../render/framebuffer";
-import { GLYPH } from "../render/palette";
-import { OVERLAY_DEPTH } from "../render/text";
-import { CELL_ASPECT, type Viewport } from "../render/viewport";
-import { MENU_COLORS } from "./menu/draw";
-import { clamp } from "../math/clamp";
+import type {Input, UiEvents} from "../core/input";
+import type {Framebuffer} from "../render/framebuffer";
+import {GLYPH} from "../render/palette";
+import {OVERLAY_DEPTH} from "../render/text";
+import type {Viewport} from "../render/viewport";
+import {MENU_COLORS} from "./menu/draw";
+import {clamp} from "../math/clamp";
 
 /**
  * O ponteiro da engine, desenhado na própria grade de caracteres.
@@ -103,8 +103,6 @@ export class Cursor {
   draw(framebuffer: Framebuffer): void {
     const nearCol = Math.round(this.preciseCol);
     const nearRow = Math.round(this.preciseRow);
-    const residualCol = this.preciseCol - nearCol;
-    const residualRow = this.preciseRow - nearRow;
 
     const plot = (
       x: number,
@@ -122,33 +120,8 @@ export class Cursor {
         emissive,
       );
 
-    plot(nearCol, nearRow, centerGlyph(residualCol, residualRow), 0.9);
-    plot(nearCol - ARM_COLS, nearRow, GLYPH.BOX_H, 0.3);
-    plot(nearCol + ARM_COLS, nearRow, GLYPH.BOX_H, 0.3);
+    plot(nearCol, nearRow, GLYPH.BOX_CROSS, 0.9);
+    plot(nearCol - ARM_COLS, nearRow, GLYPH.BRACKET_LEFT, 0.3);
+    plot(nearCol + ARM_COLS, nearRow, GLYPH.BRACKET_RIGHT, 0.3);
   }
 }
-
-/** Abaixo disto o resíduo é ruído de mouse, não posição — a cruz fica parada. */
-const OFFCENTER_DEADZONE = 0.18;
-
-/**
- * O glifo do centro do retículo, pela sobra entre a célula desenhada e a
- * posição exata.
- *
- * Compara em pixels, não em fração de célula — `residualRow * CELL_ASPECT` é
- * o mesmo ajuste de `arrowFor` (`manipulator.ts`): uma fileira vale o dobro de
- * uma coluna na tela, e comparar as frações cruas favoreceria sempre o eixo
- * vertical.
- */
-const centerGlyph = (residualCol: number, residualRow: number): number => {
-  const weightedRow = residualRow * CELL_ASPECT;
-  if (
-    Math.max(Math.abs(residualCol), Math.abs(weightedRow)) < OFFCENTER_DEADZONE
-  ) {
-    return GLYPH.BOX_CROSS;
-  }
-  if (Math.abs(residualCol) >= Math.abs(weightedRow)) {
-    return residualCol > 0 ? GLYPH.HALF_RIGHT : GLYPH.HALF_LEFT;
-  }
-  return residualRow > 0 ? GLYPH.HALF_DOWN : GLYPH.HALF_UP;
-};

@@ -1,4 +1,5 @@
-import type { Viewport } from "../viewport";
+import {showFatalError} from "../../ui/fatal-error";
+import type {Viewport} from "../viewport";
 
 /**
  * Dono do dispositivo WebGPU e do ciclo de vida dele.
@@ -26,11 +27,19 @@ export class GpuContext {
 
   private async init(): Promise<void> {
     if (!navigator.gpu) {
+      showFatalError("WEBGPU NOT AVAILABLE", [
+        "This browser does not expose the WebGPU API.",
+        "Try a recent version of Chrome or Edge.",
+      ]);
       throw new Error("WebGPU não disponível neste navegador.");
     }
 
     const adapter = await navigator.gpu.requestAdapter();
     if (adapter === null) {
+      showFatalError("WEBGPU ADAPTER NOT FOUND", [
+        "No WebGPU adapter was found on this machine.",
+        "Update your graphics driver or try a different browser.",
+      ]);
       throw new Error("Nenhum adaptador WebGPU disponível.");
     }
 
@@ -51,18 +60,22 @@ export class GpuContext {
     this.device = device;
     this.lost = false;
 
-    // Perda de dispositivo: pede um novo ao mesmo adaptador e recria tudo.
-    // `info.reason === "destroyed"` é o `device.destroy()` de propósito (ex.:
-    // troca de resolução que descarta e recria por decisão nossa) e não deve
-    // reentrar em `onRestore` — só perda de verdade (driver, GPU) deve.
+    // Perda de dispositivo: pede um adaptador novo e recria tudo. Não dá para
+    // reusar `adapter` — um `GPUAdapter` só gera um `GPUDevice`; depois do
+    // primeiro `requestDevice()` ele fica consumido e uma segunda chamada
+    // lança `OperationError`. `info.reason === "destroyed"` é o
+    // `device.destroy()` de propósito (ex.: troca de resolução que descarta e
+    // recria por decisão nossa) e não deve reentrar em `onRestore` — só perda
+    // de verdade (driver, GPU) deve.
     void device.lost.then((info) => {
       this.lost = true;
       if (info.reason === "destroyed") return;
-      void adapter.requestDevice().then((next) => {
-        this.device = next;
-        this.lost = false;
-        this.configure();
-        for (const handler of this.restoreHandlers) handler();
+      void navigator.gpu.requestAdapter().then((nextAdapter) => {
+        if (nextAdapter === null) return;
+        void this.acquireDevice(nextAdapter).then(() => {
+          this.configure();
+          for (const handler of this.restoreHandlers) handler();
+        });
       });
     });
   }

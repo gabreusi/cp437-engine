@@ -416,7 +416,6 @@ export class World implements Renderable {
     this.selectedId = null;
   }
 
-  /** A cena montada sobrevive ao reload; os ajustes da engine não. */
   save(): void {
     const plain = this.entities.map(
       ({ current: _current, mirrorMaterial: _mirrorMaterial, ...rest }) =>

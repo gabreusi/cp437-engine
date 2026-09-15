@@ -1,7 +1,7 @@
-import { settings } from "../config";
-import { addScaled } from "../math/vec3";
-import type { Camera } from "../render/camera";
-import type { Input } from "./input";
+import {settings} from "../config";
+import {addScaled} from "../math/vec3";
+import type {Camera} from "../render/camera";
+import type {Input} from "./input";
 
 const TURBO_MULTIPLIER = 4;
 
@@ -29,13 +29,13 @@ export class FreeCam {
       this.look.pitch * settings.lookSensitivity,
     );
 
-    const turbo = input.isDown("ControlLeft") || input.isDown("ControlRight");
+    const turbo = input.isDown("ShiftLeft") || input.isDown("ShiftRight");
     const speed =
       settings.moveSpeed * (turbo ? TURBO_MULTIPLIER : 1) * deltaSeconds;
 
     const forward = input.axis("KeyS", "KeyW");
     const strafe = input.axis("KeyA", "KeyD");
-    const vertical = input.axis("ShiftLeft", "Space");
+    const vertical = input.axis("KeyC", "Space");
 
     if (forward !== 0)
       addScaled(

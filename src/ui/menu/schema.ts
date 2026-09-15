@@ -1,4 +1,4 @@
-import {FONT, saveSettings, type Settings, settings} from "../../config";
+import {FONT, resetSettings, saveSettings, type Settings, settings} from "../../config";
 import type {EntityField, EntityState} from "../../scene/entities/entity";
 import {TEXTURES} from "../../render/ramp";
 import {ENTITY_KINDS, ENTITY_ORDER, type World} from "../../scene/world";
@@ -97,7 +97,7 @@ export const buildGroups = (world: World): MenuGroup[] =>
 
 const rawGroups = (world: World): MenuGroup[] => [
   {
-    label: "Camera",
+    label: "General",
     items: () => [
       slider({
         key: "fovDegrees",
@@ -116,6 +116,17 @@ const rawGroups = (world: World): MenuGroup[] => [
         step: 0.0001,
         digits: 4,
       }),
+      { kind: 'spacer' },
+      { kind: 'spacer' },
+      { kind: 'spacer' },
+      {
+        kind: "action",
+        label: "Restore default settings",
+        danger: true,
+        run: () => {
+          resetSettings();
+        },
+      }
     ],
   },
   {
@@ -290,7 +301,7 @@ const rawGroups = (world: World): MenuGroup[] => [
       slider({
         key: "renderScale",
         label: "Render Scale",
-        min: 0.5,
+        min: 0.75,
         max: 2,
         step: 0.25,
         digits: 2,

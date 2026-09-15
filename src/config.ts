@@ -159,13 +159,13 @@ export const settings: Settings = {
   lightingEnabled: true,
   shadowsEnabled: true,
   reflectionsEnabled: true,
-  doubleReflections: false,
+  doubleReflections: true,
   ambientLevel: 0.05,
   gridGlow: 0.1,
   sunLightIntensity: 0.7,
-  skyReflectionIntensity: 1,
+  skyReflectionIntensity: 0.2,
   groundReflectivity: 1,
-  groundFillLight: 1,
+  groundFillLight: 0.2,
   groundGloss: 2,
   rampWeight: 10,
   rampExposure: 0.5,
@@ -230,6 +230,17 @@ export const loadSettings = (): void => {
   } catch {
     // Salvo corrompido: fica no default.
   }
+};
+
+/**
+ * Repõe `settings` nos defaults, em memória e no `localStorage`.
+ *
+ * Diferente de `localStorage.clear()` (usado antes no menu), não mexe em
+ * nenhuma outra chave — em particular preserva `World` salvo.
+ */
+export const resetSettings = (): void => {
+  Object.assign(settings, DEFAULT_SETTINGS);
+  saveSettings();
 };
 
 export const CANVAS_BACKGROUND = "#05000e";
