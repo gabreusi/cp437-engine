@@ -49,7 +49,7 @@ letras cai para a versão sem acento (`á`→`a`) em vez de sumir da grade.
 | clique na cena  | captura o mouse                 |
 | mouse           | olhar                           |
 | `W` `A` `S` `D` | andar                           |
-| `Q` `E`         | descer e subir                  |
+| `C` `Space`         | descer e subir                  |
 | `Shift`         | turbo                           |
 | `Tab`           | liga e desliga o modo de edição |
 | `Esc`           | solta o mouse e abre o menu     |
@@ -554,13 +554,3 @@ cobre a cena com os 256 glifos e confere atlas e data textures.
 `step()` desenha um quadro sob demanda. Numa aba em segundo plano o
 `requestAnimationFrame` não dispara, e sem ele qualquer verificação de "mudei o
 ajuste, o que aconteceu?" mede o quadro anterior e conclui que nada mudou.
-
-## O que ainda não existe
-
-Isto é a engine, não o jogo. Não há colisão nem estado de jogo, e a simulação não
-faz nada além de mover a câmera e girar os orbes. A costura para isso é
-`Renderable` e o `World`, que é onde o `gameState` já começou a existir: os
-ajustes de `settings` são preferência de quem olha, a cena é conteúdo — a
-distinção que importa é essa, não mais quem é salvo: os dois são, cada um sob
-sua própria chave de `localStorage`, e cada um mesclado sobre seus próprios
-defaults ao carregar.
