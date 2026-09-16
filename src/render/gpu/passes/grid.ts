@@ -38,7 +38,12 @@ fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
   let glyph = i32(data.r * 255.0 + 0.5);
   let atlasCols = i32(p.atlasGrid.x);
   let glyphCell = vec2f(f32(glyph % atlasCols), f32(glyph / atlasCols));
-  let atlasUv = (glyphCell + fract(gridPos)) / p.atlasGrid;
+  // Margem contra a borda da célula: perto de 0.0/1.0 exatos, o
+  // arredondamento do filtro nearest diverge entre backends (Vulkan no
+  // Linux, D3D12 no Windows) e pode amostrar um texel da célula vizinha,
+  // aparecendo como risco vertical na lateral do glifo.
+  let cellFrac = clamp(fract(gridPos), vec2f(0.001), vec2f(0.999));
+  let atlasUv = (glyphCell + cellFrac) / p.atlasGrid;
 
   let coverage = textureSample(atlas, atlasSampler, atlasUv).a;
 
