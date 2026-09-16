@@ -42,7 +42,7 @@ fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
   // arredondamento do filtro nearest diverge entre backends (Vulkan no
   // Linux, D3D12 no Windows) e pode amostrar um texel da célula vizinha,
   // aparecendo como risco vertical na lateral do glifo.
-  let cellFrac = clamp(fract(gridPos), vec2f(0.001), vec2f(0.999));
+  let cellFrac = clamp(fract(gridPos), vec2f(0.091), vec2f(0.9));
   let atlasUv = (glyphCell + cellFrac) / p.atlasGrid;
 
   let coverage = textureSample(atlas, atlasSampler, atlasUv).a;
