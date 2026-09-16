@@ -62,11 +62,26 @@ const MAX_CELL = 64;
 export const atlasCellWidthFor = (cellWidthDevicePx: number): number =>
   Math.min(MAX_CELL, Math.max(MIN_CELL, Math.round(cellWidthDevicePx)));
 
+/**
+ * Margem em pixels de textura em volta de cada célula, preenchida com o
+ * próprio pixel da borda (extrusão) — não com fundo transparente.
+ *
+ * O arredondamento de `cellFrac` no fragment shader (`grid.ts`) diverge entre
+ * backends perto de 0.0/1.0 exato, e sem essa margem o texel amostrado cai na
+ * célula vizinha. Com a borda extrudida para dentro do padding, não importa
+ * de que lado o arredondamento erra: o texel extra é idêntico ao da borda
+ * real, então nunca aparece como risco. Os glifos continuam desenhados
+ * encostados na borda da célula (ver nota em `drawGlyphAtlasCanvas`) — o
+ * padding é espaço extra ao redor, não recuo do próprio traço.
+ */
+export const ATLAS_PAD = 2;
+
 export interface GlyphAtlasCanvas {
   canvas: HTMLCanvasElement;
   cols: number;
   rows: number;
   cellWidth: number;
+  pad: number;
 }
 
 interface CellBox {
@@ -208,23 +223,29 @@ const PAINTERS: Record<string, GlyphPainter> = {
  * Desenha o charset num canvas 2D — sem subir para GPU nenhuma. Cada backend
  * de apresentação decide sozinho como isso vira textura.
  *
- * Sem antialiasing na medição/preenchimento: além de ser a estética certa
- * para arte ASCII, evita o glifo vizinho sangrar na borda da célula sem
- * precisar de padding — e padding faria os blocos pararem antes da borda,
- * abrindo frestas na silhueta do sol e nas emendas da grade.
+ * Sem antialiasing na medição/preenchimento: é a estética certa para arte
+ * ASCII, e mantém a borda do glifo um degrau nítido — o que a extrusão de
+ * `extrudeCellBorder` depende para replicar exatamente, sem meio-tom. O
+ * padding em si (`ATLAS_PAD`) fica por fora da célula lógica: os glifos ainda
+ * são desenhados encostados nas quatro bordas, senão blocos e moldura
+ * abririam fresta na emenda entre células.
  */
 export const drawGlyphAtlasCanvas = (cellWidth: number): GlyphAtlasCanvas => {
   const cellHeight = cellWidth * CELL_ASPECT;
   const cols = ATLAS_COLS;
   const rows = Math.ceil(CHARSET.length / cols);
+  const pad = ATLAS_PAD;
+  const strideX = cellWidth + pad * 2;
+  const strideY = cellHeight + pad * 2;
 
   const canvas = document.createElement("canvas");
-  canvas.width = cols * cellWidth;
-  canvas.height = rows * cellHeight;
+  canvas.width = cols * strideX;
+  canvas.height = rows * strideY;
 
   const ctx = canvas.getContext("2d");
   if (ctx === null)
     throw new Error("Canvas 2D indisponível para montar o atlas.");
+  ctx.imageSmoothingEnabled = false;
 
   const fontStack = FONT_STACKS[settings.fontFamily];
 
@@ -241,8 +262,8 @@ export const drawGlyphAtlasCanvas = (cellWidth: number): GlyphAtlasCanvas => {
   for (let index = 0; index < CHARSET.length; index += 1) {
     const char = CHARSET[index] ?? " ";
     const box: CellBox = {
-      x: (index % cols) * cellWidth,
-      y: Math.floor(index / cols) * cellHeight,
+      x: (index % cols) * strideX + pad,
+      y: Math.floor(index / cols) * strideY + pad,
       w: cellWidth,
       h: cellHeight,
     };
@@ -253,7 +274,41 @@ export const drawGlyphAtlasCanvas = (cellWidth: number): GlyphAtlasCanvas => {
     } else {
       ctx.fillText(char, box.x + box.w / 2, box.y + box.h / 2);
     }
+
+    extrudeCellBorder(ctx, box, pad);
   }
 
-  return { canvas, cols, rows, cellWidth };
+  return { canvas, cols, rows, cellWidth, pad };
+};
+
+/**
+ * Copia a borda de 1px de cada lado da célula para dentro do padding ao
+ * redor, esticada. Com `imageSmoothingEnabled = false`, uma fonte de 1px
+ * esticada em `pad` não borra — repete o mesmo texel `pad` vezes, então o
+ * padding fica indistinguível de mais borda real.
+ */
+const extrudeCellBorder = (
+  ctx: CanvasRenderingContext2D,
+  box: CellBox,
+  pad: number,
+): void => {
+  const { x, y, w, h } = box;
+  ctx.drawImage(ctx.canvas, x, y, 1, h, x - pad, y, pad, h);
+  ctx.drawImage(ctx.canvas, x + w - 1, y, 1, h, x + w, y, pad, h);
+  ctx.drawImage(ctx.canvas, x, y, w, 1, x, y - pad, w, pad);
+  ctx.drawImage(ctx.canvas, x, y + h - 1, w, 1, x, y + h, w, pad);
+  ctx.drawImage(ctx.canvas, x, y, 1, 1, x - pad, y - pad, pad, pad);
+  ctx.drawImage(ctx.canvas, x + w - 1, y, 1, 1, x + w, y - pad, pad, pad);
+  ctx.drawImage(ctx.canvas, x, y + h - 1, 1, 1, x - pad, y + h, pad, pad);
+  ctx.drawImage(
+    ctx.canvas,
+    x + w - 1,
+    y + h - 1,
+    1,
+    1,
+    x + w,
+    y + h,
+    pad,
+    pad,
+  );
 };

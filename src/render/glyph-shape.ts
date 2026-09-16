@@ -143,12 +143,14 @@ export const buildShapeEntries = (
   const cellWidth = atlas.cellWidth;
   const cellHeight = cellWidth * CELL_ASPECT;
   const radius = cellWidth * SAMPLE_RADIUS_FRACTION;
+  const strideX = cellWidth + atlas.pad * 2;
+  const strideY = cellHeight + atlas.pad * 2;
 
   return glyphs.map((glyph) => {
     const col = glyph % atlas.cols;
     const row = Math.floor(glyph / atlas.cols);
-    const boxX = col * cellWidth;
-    const boxY = row * cellHeight;
+    const boxX = col * strideX + atlas.pad;
+    const boxY = row * strideY + atlas.pad;
 
     const image = ctx.getImageData(boxX, boxY, cellWidth, cellHeight);
     const data = image.data;

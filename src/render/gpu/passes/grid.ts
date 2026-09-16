@@ -1,4 +1,5 @@
 import { EMISSIVE_RANGE } from "../../framebuffer";
+import { CELL_ASPECT } from "../../viewport";
 import { FULLSCREEN_VERTEX_WGSL, drawFullscreen } from "../fullscreen";
 import type { GlyphAtlas } from "../atlas";
 
@@ -13,8 +14,7 @@ struct Params {
   atlasGrid: vec2f,
   emissiveRange: f32,
   _pad0: f32,
-  _pad1: f32,
-  _pad2: f32,
+  padFrac: vec2f,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -38,12 +38,15 @@ fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
   let glyph = i32(data.r * 255.0 + 0.5);
   let atlasCols = i32(p.atlasGrid.x);
   let glyphCell = vec2f(f32(glyph % atlasCols), f32(glyph / atlasCols));
-  // Margem contra a borda da célula: perto de 0.0/1.0 exatos, o
-  // arredondamento do filtro nearest diverge entre backends (Vulkan no
-  // Linux, D3D12 no Windows) e pode amostrar um texel da célula vizinha,
-  // aparecendo como risco vertical na lateral do glifo.
-  let cellFrac = clamp(fract(gridPos), vec2f(0.091), vec2f(0.9));
-  let atlasUv = (glyphCell + cellFrac) / p.atlasGrid;
+  // O atlas reserva padFrac de cada slot como margem extrudida (ver
+  // ATLAS_PAD em atlas-canvas.ts) — a célula visível mapeia só para o
+  // miolo do slot, nunca para os 0.0/1.0 exatos onde o arredondamento do
+  // filtro nearest diverge entre backends (Vulkan no Linux, D3D12 no
+  // Windows). Se o arredondamento escorregar para dentro da margem, o texel
+  // ali é cópia da própria borda, não da célula vizinha.
+  let cellFrac = fract(gridPos);
+  let innerFrac = p.padFrac + cellFrac * (vec2f(1.0) - 2.0 * p.padFrac);
+  let atlasUv = (glyphCell + innerFrac) / p.atlasGrid;
 
   let coverage = textureSample(atlas, atlasSampler, atlasUv).a;
 
@@ -143,6 +146,7 @@ export class GridPass {
     if (this.bindGroup === null) return;
 
     const { atlas } = this;
+    const cellHeight = atlas.cellWidth * CELL_ASPECT;
     const d = this.paramsData;
     d[0] = this.colCount;
     d[1] = this.rowCount;
@@ -150,8 +154,8 @@ export class GridPass {
     d[3] = atlas.rows;
     d[4] = EMISSIVE_RANGE;
     d[5] = 0;
-    d[6] = 0;
-    d[7] = 0;
+    d[6] = atlas.pad / (atlas.cellWidth + atlas.pad * 2);
+    d[7] = atlas.pad / (cellHeight + atlas.pad * 2);
     this.device.queue.writeBuffer(this.paramsBuffer, 0, d);
 
     pass.setPipeline(this.pipeline);

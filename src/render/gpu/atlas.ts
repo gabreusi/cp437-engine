@@ -12,6 +12,7 @@ export interface GlyphAtlas {
   cols: number;
   rows: number;
   cellWidth: number;
+  pad: number;
   canvas: HTMLCanvasElement;
 }
 
@@ -24,7 +25,7 @@ export const buildGlyphAtlas = (
   device: GPUDevice,
   cellWidth: number,
 ): GlyphAtlas => {
-  const { canvas, cols, rows } = drawGlyphAtlasCanvas(cellWidth);
+  const { canvas, cols, rows, pad } = drawGlyphAtlasCanvas(cellWidth);
 
   const texture = device.createTexture({
     label: "glyph-atlas",
@@ -42,5 +43,5 @@ export const buildGlyphAtlas = (
     { width: canvas.width, height: canvas.height },
   );
 
-  return { texture, view: texture.createView(), cols, rows, cellWidth, canvas };
+  return { texture, view: texture.createView(), cols, rows, cellWidth, pad, canvas };
 };
