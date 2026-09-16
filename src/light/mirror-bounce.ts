@@ -89,6 +89,15 @@ const applyBounce = (
   // além da posição era checado. Mesma fórmula de `shadeCore`
   // (`render/gpu/passes/shading.ts`): `cosAxis` é o quanto a direção
   // luz→ponto concorda com o eixo do cone; abaixo de `coneCos` está fora.
+  //
+  // Mas `planeAnchor` é só UM ponto do espelho (o centro da caixa, o ponto
+  // de contato da esfera) — testar só esse ponto rejeitava o bounce inteiro
+  // sempre que o holofote mirava uma borda do espelho em vez do centro,
+  // mesmo com o cone claramente varrendo parte da superfície (o sintoma era
+  // reflexo "só no centro"). `mirror.boundRadius` dá o raio angular que o
+  // espelho ocupa visto da luz; folgamos o corte por esse ângulo em vez de
+  // testar um ponto só. É uma pré-checagem grosseira mesmo — o teste exato
+  // por pixel é o `traceNearestIndex` em `shadeCore`.
   if (light.kind !== LIGHT.DIRECTIONAL && light.coneCos > -1) {
     const dx = light.position.x - planeAnchor.x;
     const dy = light.position.y - planeAnchor.y;
@@ -99,7 +108,10 @@ const applyBounce = (
         -((dx / dist) * light.direction.x +
           (dy / dist) * light.direction.y +
           (dz / dist) * light.direction.z);
-      if (cosAxis < light.coneCos) return;
+      const angleToAxis = Math.acos(Math.min(1, Math.max(-1, cosAxis)));
+      const angularRadius = Math.asin(Math.min(1, mirror.boundRadius / dist));
+      const coneHalfAngle = Math.acos(Math.min(1, Math.max(-1, light.coneCos)));
+      if (angleToAxis - angularRadius > coneHalfAngle) return;
     }
   }
 
