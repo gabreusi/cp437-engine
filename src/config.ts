@@ -86,6 +86,14 @@ export interface Settings {
    * primeiro reflexo acerta outro espelho.
    */
   doubleReflections: boolean;
+  /**
+   * Reflexo indireto de esfera-espelho: quica luz de verdade nela, achando
+   * o ponto exato onde a lei da reflexão vale para o fragmento sendo
+   * sombreado (ver `render/gpu/passes/shading.ts`, `sphereMirrorBounce`) —
+   * sem custo quando a cena não tem esfera-espelho nenhuma. Existe como
+   * escape hatch de performance para quando ela tem.
+   */
+  sphereMirrorBounce: boolean;
   /** Luz que chega de todo lado. Sem ela, o que está na sombra some. */
   ambientLevel: number;
   /** Força do sol como luz direcional, separada do brilho do disco. */
@@ -160,6 +168,7 @@ export const settings: Settings = {
   shadowsEnabled: true,
   reflectionsEnabled: true,
   doubleReflections: true,
+  sphereMirrorBounce: true,
   ambientLevel: 0.05,
   gridGlow: 0.1,
   sunLightIntensity: 0.7,

@@ -206,6 +206,7 @@ export class GpuPresenter implements Presenter {
         sunWashIntensity: settings.sunWashEnabled ? settings.sunWashIntensity : 0,
         gridSize: settings.gridSize,
         doubleReflections: settings.doubleReflections,
+        sphereMirrorBounce: settings.sphereMirrorBounce,
       },
     );
   }

@@ -312,6 +312,7 @@ const rawGroups = (world: World): MenuGroup[] => [
       toggle("shadowsEnabled", "Shadows"),
       toggle("reflectionsEnabled", "Reflections"),
       toggle("doubleReflections", "Double Reflections"),
+      toggle("sphereMirrorBounce", "Sphere Mirror Bounce"),
       slider({
         key: "ambientLevel",
         label: "Ambient",

@@ -20,30 +20,34 @@ import type { LightWorld } from "./world";
  * até a luz-imagem acertar primeiro o espelho de origem, não vazando por
  * fora dele como um segundo sol.
  *
- * Caixa e esfera, cada uma com sua normal.
+ * Só caixa. A normal é fixa por espelho (o eixo mais fino da caixa,
+ * calculado uma vez fora do laço de luzes) porque o espelho *é* aquela
+ * face — refletir por qualquer outro plano mostraria uma imagem errada. Um
+ * espelho plano tem, por construção, uma única imagem de uma luz, válida
+ * para *qualquer* receptor ao mesmo tempo — é o que permite calcular essa
+ * imagem uma vez por (luz, espelho) por quadro aqui na CPU, sem saber nada
+ * sobre quem vai receber a luz depois.
  *
- * A caixa tem uma normal fixa por espelho (o eixo mais fino, calculado uma
- * vez fora do laço de luzes) porque o espelho *é* aquela face — refletir por
- * qualquer outro plano mostraria uma imagem errada. A esfera não tem uma
- * normal única: aqui a normal (e o ponto de contato) são recalculados para
- * cada luz, no ponto da superfície mais próximo dela — o plano tangente ali
- * é uma aproximação de espelho plano *local*, válida perto do ponto de
- * contato e cada vez pior longe dele, porque a curvatura espalha o reflexo
- * em vez de mantê-lo focado como o de uma superfície plana. É por isso que
- * `SPHERE_BOUNCE_RANGE_FACTOR` encurta o alcance da luz-imagem da esfera bem
- * abaixo do `range` original da luz: a distância em linha reta até ela deixa
- * de ser a distância física exata do caminho refletido assim que o ponto de
- * contato muda com quem está olhando, e um alcance grande vazaria luz onde a
- * aproximação já não vale.
+ * Esfera não passa por aqui, e não é por falta de implementação: uma
+ * superfície curva não tem essa propriedade. O ponto de contato correto
+ * numa esfera depende de quem está *recebendo* a luz também (princípio de
+ * Fermat — o caminho luz→espelho→receptor precisa ter ângulos de incidência
+ * e reflexão iguais no ponto de contato), então não existe um único
+ * "espelho-imagem" que sirva para toda a cena de uma vez, do jeito que
+ * existe para um plano. A única forma de resolver isso direito é por
+ * fragmento, onde a posição do receptor já está disponível — ver
+ * `sphereMirrorBounce` em `render/gpu/passes/shading.ts`, que resolve o
+ * ponto de contato por iteração de ponto fixo sobre o half-vector.
  *
  * Um bounce só: itera a contagem de luzes de antes deste passo, então uma
- * luz-imagem nunca gera outra.
+ * luz-imagem nunca gera outra (a versão de esfera em `shading.ts` impõe a
+ * mesma regra filtrando por `apertureOwnerId < 0` — só luz de verdade
+ * quica, luz de bounce não requica).
  */
 
 const mirrorNormal: Vec3 = vec3();
 const signedNormal: Vec3 = vec3();
 const towardSource: Vec3 = vec3();
-const spherePoint: Vec3 = vec3();
 const probeOrigin: Vec3 = vec3();
 const toLight: Vec3 = vec3();
 const virtualDirection: Vec3 = vec3();
@@ -55,23 +59,9 @@ const APERTURE_EPSILON = 1e-4;
 const DIRECTIONAL_PROBE_DISTANCE = 1e6;
 
 /**
- * Múltiplo do raio que limita o alcance da luz-imagem de uma esfera — ver o
- * parágrafo sobre a aproximação de plano tangente acima. Calibrado a olho:
- * perto o bastante para a mancha de luz ficar perto da esfera (o que se vê),
- * longe o bastante para não parecer cortada de repente.
- */
-const SPHERE_BOUNCE_RANGE_FACTOR = 6;
-
-/**
- * A sonda de visibilidade, a reflexão de posição/direção pelo plano tangente
- * em `(planeAnchor, normal)` e a luz-imagem em si — o que caixa e esfera
- * fazem igual, uma vez que cada uma já achou seu próprio ponto de contato e
- * normal. `planeAnchor` é o ponto do plano de reflexo (o centro da caixa,
- * que a aproxima de um espelho fino centrado ali; o ponto de contato de
- * verdade na esfera, que tem curvatura de sobra para a diferença importar).
- * `rangeLimit` deixa a esfera encurtar o alcance da luz-imagem (ver o
- * comentário de `SPHERE_BOUNCE_RANGE_FACTOR`); a caixa passa `Infinity`, sem
- * teto além do `range` da luz original.
+ * A sonda de visibilidade, a reflexão de posição/direção pelo plano do
+ * espelho e a luz-imagem em si. `planeAnchor` é o centro da caixa — o plano
+ * de reflexo é o que a aproxima de um espelho fino centrado ali.
  */
 const applyBounce = (
   world: LightWorld,
@@ -81,7 +71,6 @@ const applyBounce = (
   planeAnchor: Vec3,
   normal: Vec3,
   probeOrigin: Vec3,
-  rangeLimit: number,
 ): void => {
   // Cone do holofote: `towardSource`/`normal` só descrevem POSIÇÃO relativa
   // a `planeAnchor`, nunca para onde o feixe aponta — sem isto, um holofote
@@ -175,7 +164,7 @@ const applyBounce = (
   mulRgb(bounce.color, light.color, material.albedo);
   scaleRgb(bounce.color, bounce.color, material.reflectivity);
   bounce.intensity = light.intensity;
-  bounce.range = Math.min(light.range, rangeLimit);
+  bounce.range = light.range;
   bounce.castsShadow = light.castsShadow;
   bounce.coneCos = light.coneCos;
   bounce.coneSoftness = light.coneSoftness;
@@ -247,72 +236,12 @@ export const addMirrorBounceLights = (world: LightWorld): void => {
 
       // A distância em linha reta até a luz-imagem já é a distância física
       // do caminho todo (receptor → espelho → luz) — o `range` original
-      // continua a medida certa, sem escalar (`Infinity` não encurta nada
-      // no `Math.min` de `applyBounce`).
-      applyBounce(
-        world,
-        mirror,
-        light,
-        material,
-        mirror.center,
-        signedNormal,
-        probeOrigin,
-        Infinity,
-      );
+      // continua a medida certa, sem escalar.
+      applyBounce(world, mirror, light, material, mirror.center, signedNormal, probeOrigin);
     }
   }
 
-  // Esfera: sem uma normal fixa por espelho — recalculada por luz, no ponto
-  // de contato de verdade na superfície (ver o comentário no topo do
-  // arquivo). Um segundo laço, e não um branch dentro do de cima, porque a
-  // preparação por espelho diverge cedo: a caixa monta `mirrorNormal` uma
-  // vez fora do laço de luzes, a esfera não tem o que pré-computar ali.
-  for (let oi = 0; oi < originalOccluderCount; oi += 1) {
-    const mirror = world.occluder(oi);
-    if (mirror.kind !== OCCLUDER.SPHERE) continue;
-
-    const { material } = mirror;
-    if (material === null || !material.mirror || material.reflectivity <= 0) {
-      continue;
-    }
-
-    for (let li = 0; li < originalLightCount; li += 1) {
-      const light = world.light(li);
-
-      if (light.kind === LIGHT.DIRECTIONAL) {
-        set(towardSource, light.direction.x, light.direction.y, light.direction.z);
-      } else {
-        sub(towardSource, light.position, mirror.center);
-        normalize(towardSource, towardSource);
-      }
-
-      // Ponto da esfera mais próximo da luz — onde um brilho bateria — e a
-      // normal ali, que é o próprio `towardSource`: ao contrário da caixa,
-      // não há lado a escolher, a normal da esfera nesse ponto já aponta
-      // para quem a ilumina.
-      set(
-        spherePoint,
-        mirror.center.x + towardSource.x * mirror.radius,
-        mirror.center.y + towardSource.y * mirror.radius,
-        mirror.center.z + towardSource.z * mirror.radius,
-      );
-      set(
-        probeOrigin,
-        spherePoint.x + towardSource.x * SHADOW_BIAS,
-        spherePoint.y + towardSource.y * SHADOW_BIAS,
-        spherePoint.z + towardSource.z * SHADOW_BIAS,
-      );
-
-      applyBounce(
-        world,
-        mirror,
-        light,
-        material,
-        spherePoint,
-        towardSource,
-        probeOrigin,
-        mirror.radius * SPHERE_BOUNCE_RANGE_FACTOR,
-      );
-    }
-  }
+  // Esfera não passa por aqui — ver o comentário no topo do arquivo:
+  // resolvida por fragmento em `sphereMirrorBounce`
+  // (`render/gpu/passes/shading.ts`), não pré-computada por quadro na CPU.
 };

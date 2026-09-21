@@ -26,11 +26,14 @@ import {
  * É isso que permite receber luz, projetar sombra e espelhar de verdade, e é
  * o que falta ao orbe fazer o mesmo.
  *
- * Sem luz secundária de espelho (`light/mirror-bounce.ts`): aquele truque
- * reflete cada luz através de um único plano, e uma esfera não tem uma
- * normal única — só uma por ponto da curvatura. O reflexo *visual* (a esfera
- * aparecer refletida, e mostrar reflexo nela) já funciona por ser uma
- * superfície deferida comum.
+ * Luz secundária de espelho funciona aqui também, mas não pelo mesmo
+ * caminho da caixa (`light/mirror-bounce.ts`): como a esfera não tem uma
+ * normal única, o ponto de contato certo depende de quem está *recebendo*
+ * a luz, não só de quem a emite — por isso é resolvido por fragmento, na
+ * GPU (`sphereMirrorBounce`, `render/gpu/passes/shading.ts`), por iteração,
+ * em vez de pré-calculado uma vez por quadro na CPU como a caixa. O reflexo
+ * *visual* (a esfera aparecer refletida, e mostrar reflexo nela) é
+ * independente disso: já funciona por ser uma superfície deferida comum.
  */
 
 const projected = createProjected();

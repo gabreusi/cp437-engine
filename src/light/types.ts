@@ -78,10 +78,16 @@ export interface Occluder {
    */
   toLocal: Mat4;
   /**
-   * Raio da esfera que envolve a caixa inteira, recalculado uma vez por
-   * quadro em `LightWorld.finalize()`. Dá escala ao bias de autossombra da
-   * caixa (`SELF_SHADOW_FRACTION` em `trace.ts`) sem um valor mágico fixo.
-   * Ignorado por esferas.
+   * Raio da esfera que envolve o corpo inteiro (a própria esfera, no caso;
+   * a diagonal da caixa, no outro), recalculado uma vez por quadro em
+   * `LightWorld.finalize()`. Usado só pela caixa: escala o bias de
+   * autossombra (`SELF_SHADOW_FRACTION` em `trace.ts`) e a folga angular do
+   * cone de holofote em `light/mirror-bounce.ts` (que só trata caixa — ver o
+   * comentário no topo daquele arquivo). Para esfera, calculado do mesmo
+   * jeito por uniformidade, mas sem consumidor hoje: a checagem grosseira de
+   * cone que a caixa precisa não existe para esfera, porque
+   * `sphereMirrorBounce` (`render/gpu/passes/shading.ts`) já resolve o ponto
+   * de contato exato por fragmento, sem pré-checagem nenhuma.
    */
   boundRadius: number;
   /** O que um raio de reflexão enxerga ao acertar este corpo. */

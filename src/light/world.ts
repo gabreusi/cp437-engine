@@ -152,23 +152,31 @@ export class LightWorld {
   }
 
   /**
-   * Pré-calcula o raio da esfera que envolve cada caixa — escala do bias de
-   * autossombra em `trace.ts` (`SELF_SHADOW_FRACTION`). Uma vez aqui evita
-   * recalcular a mesma raiz quadrada em cada um dos milhares de raios que
-   * testam a mesma parede no mesmo quadro.
+   * Pré-calcula o raio da esfera que envolve cada corpo — a mesma medida de
+   * "tamanho" para caixa e esfera, cada uma servindo dois consumidores que
+   * nada sabem sobre a forma: o bias de autossombra em `trace.ts`
+   * (`SELF_SHADOW_FRACTION`, só relevante para caixa — esfera nunca chega lá
+   * porque se ignora inteira como próprio corpo) e a folga angular do cone de
+   * holofote em `light/mirror-bounce.ts` (relevante para as duas formas). Uma
+   * função só, sem `if (kind === BOX)` no chamador: um corpo sem raio
+   * envolvente calculado é indistinguível de um corpo do tamanho de um ponto,
+   * e um espelho esférico voltava a exigir mira exata (o mesmo bug que a
+   * caixa já tinha corrigido) só porque ninguém preencheu o campo para ele.
    *
    * Chamado depois que todo `contribute()` do quadro terminou: só então
-   * `half` de toda caixa está definitivo.
+   * `half`/`radius` de todo corpo está definitivo.
    */
   finalize(): void {
     for (let index = 0; index < this.occluders; index += 1) {
       const occluder = this.occluderPool[index]!;
-      if (occluder.kind !== OCCLUDER.BOX) continue;
-
-      const { half } = occluder;
-      occluder.boundRadius = Math.sqrt(
-        half.x * half.x + half.y * half.y + half.z * half.z,
-      );
+      if (occluder.kind === OCCLUDER.BOX) {
+        const { half } = occluder;
+        occluder.boundRadius = Math.sqrt(
+          half.x * half.x + half.y * half.y + half.z * half.z,
+        );
+      } else {
+        occluder.boundRadius = occluder.radius;
+      }
     }
   }
 }

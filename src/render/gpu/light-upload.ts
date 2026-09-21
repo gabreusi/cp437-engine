@@ -1,3 +1,4 @@
+import { OCCLUDER } from "../../light/types";
 import type { LightWorld } from "../../light/world";
 
 /**
@@ -90,6 +91,8 @@ export class LightUpload {
 
   lightCount = 0;
   occluderCount = 0;
+  /** Portão de custo de `sphereMirrorBounce` (shading.ts): sem isto, a cena mais comum (sem esfera-espelho) pagaria o laço à toa. */
+  hasSphereMirror = false;
   readonly sky: SkyUniformValues = {
     sunDirX: 0,
     sunDirY: 1,
@@ -199,10 +202,19 @@ export class LightUpload {
     }
 
     this.occluderCount = Math.min(MAX_OCCLUDERS, world.occluderCount);
+    this.hasSphereMirror = false;
     for (let i = 0; i < this.occluderCount; i += 1) {
       const occluder = world.occluder(i);
       const d = this.occluderData;
       const base = i * OCCLUDER_STRIDE;
+      if (
+        occluder.kind === OCCLUDER.SPHERE &&
+        occluder.material !== null &&
+        occluder.material.mirror &&
+        occluder.material.reflectivity > 0
+      ) {
+        this.hasSphereMirror = true;
+      }
       d[base + 0] = occluder.kind;
       d[base + 1] = occluder.center.x;
       d[base + 2] = occluder.center.y;

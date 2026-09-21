@@ -41,6 +41,7 @@ struct Uniforms {
   rampParams: vec4f,      // rampWeight, rampExposure, emissiveRange, sunWashIntensity
   counts: vec4f,          // lightCount, occluderCount, starCount, edgeNearCount
   counts2: vec4f,         // edgeFarCount, colCount, rowCount, sunWashSize
+  extra: vec4f,           // sphereMirrorBounceEnabled, _, _, _
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -79,6 +80,16 @@ const SHADOW_BIAS = 2e-3;
 const SELF_SHADOW_FRACTION = 0.02;
 const MIRROR_RANGE = 400.0;
 const PARALLEL_EPSILON = 1e-9;
+
+// sphereMirrorBounce: ponto de reflexão exato por fragmento numa esfera —
+// ver o comentário da função. Sub-relaxação evita divergência quando luz e
+// receptor estão perto de antípodas na esfera (o mapa de ponto fixo deixa
+// de contrair ali); a saída antecipada por convergência faz o caso comum
+// (bem longe de antípodas) custar 1-2 iterações, não 8.
+const SPHERE_BOUNCE_MAX_ITERATIONS = 8;
+const SPHERE_BOUNCE_DAMPING = 0.6;
+const SPHERE_BOUNCE_CONVERGENCE_COS = 0.999995;
+const SPHERE_BOUNCE_MIN_SUM_LEN = 1e-4;
 
 const WASH_WIDTH = 0.32;
 const WASH_AZIMUTH_FALLOFF = 1.2;
@@ -537,6 +548,132 @@ fn faceNormal(n: vec3f, viewDir: vec3f) -> vec3f {
   return select(n, -n, dot(n, viewDir) < 0.0);
 }
 
+// Queda de intensidade por distância, janelada para chegar suave em zero no
+// range — mesma fórmula do laço de luz de shadeCore, fatorada para
+// sphereMirrorBounce reusar nas duas pernas do quique.
+fn windowedInverseSquare(distSq: f32, range: f32) -> f32 {
+  let ratio = distSq / (range * range);
+  let window = max(0.0, 1.0 - ratio * ratio);
+  return (window * window * HALF_POWER_SQ) / (distSq + HALF_POWER_SQ);
+}
+
+// Iluminação indireta de espelho-esfera: ao contrário do espelho plano
+// (light/mirror-bounce.ts), uma esfera não tem uma única imagem de uma
+// luz válida para todo receptor — o ponto de contato certo depende de quem
+// está recebendo a luz também (princípio de Fermat: ângulo de incidência
+// igual ao de reflexão no ponto de contato). Só existe aqui, por fragmento,
+// porque só aqui pos (o receptor) está disponível.
+//
+// Resolvido por ponto fixo sobre o half-vector: no ponto de contato certo,
+// a normal da esfera bissecta as direções até a luz e até o receptor — o
+// mesmo princípio do half-vector de Blinn-Phong, aqui resolvido como ponto
+// fixo em vez de assumido a partir de uma normal já conhecida.
+//
+// Chamada uma vez dentro de shadeCore, então os quatro pontos que já
+// chamam shadeCore (superfície direta, chão refletido, primeiro e
+// segundo nível de espelho) ganham o efeito sem duplicar o laço de luz.
+fn sphereMirrorBounce(pos: vec3f, n: vec3f, ownerId: f32, shadowThreshold: f32) -> vec3f {
+  var color = vec3f(0.0);
+  if (u.extra.x < 0.5) { return color; }
+
+  let occCount = i32(u.counts.y);
+  let lightCount = i32(u.counts.x);
+
+  for (var mi = 0; mi < occCount; mi++) {
+    let mirror = occluders[mi];
+    if (i32(mirror.row0.x + 0.5) != OCCLUDER_SPHERE) { continue; }
+    let mOwner = mirror.row10.x;
+    if (mOwner == ownerId) { continue; }
+    if (mirror.row7.x <= 0.5) { continue; }
+    if (mirror.row9.z <= 0.5 || mirror.row9.x <= 0.0) { continue; }
+    let center = mirror.row0.yzw;
+    let radius = mirror.row1.x;
+
+    for (var li = 0; li < lightCount; li++) {
+      let light = lights[li];
+      if (light.row3.w >= 0.0) { continue; }
+      let isDirectional = i32(light.row0.x + 0.5) == LIGHT_DIRECTIONAL;
+      let lightPos = light.row0.yzw;
+      let lightAxis = light.row1.xyz;
+      let range = light.row2.w;
+
+      // Chute inicial: bissetriz das direções vistas do centro.
+      let toLc = select(normalize(lightPos - center), lightAxis, isDirectional);
+      let toPc = normalize(pos - center);
+      let sum0 = toLc + toPc;
+      if (length(sum0) < SPHERE_BOUNCE_MIN_SUM_LEN) { continue; }
+      var uDir = normalize(sum0);
+      var r = center + uDir * radius;
+
+      var toL = vec3f(0.0);
+      var toP = vec3f(0.0);
+      for (var it = 0; it < SPHERE_BOUNCE_MAX_ITERATIONS; it++) {
+        toL = select(normalize(lightPos - r), lightAxis, isDirectional);
+        toP = normalize(pos - r);
+        let sum = toL + toP;
+        if (length(sum) < SPHERE_BOUNCE_MIN_SUM_LEN) { break; }
+        let unew = normalize(sum);
+        if (dot(unew, uDir) > SPHERE_BOUNCE_CONVERGENCE_COS) { uDir = unew; break; }
+        uDir = normalize(mix(uDir, unew, SPHERE_BOUNCE_DAMPING));
+        r = center + uDir * radius;
+      }
+
+      // De costas para a luz ou para o receptor: geometricamente impossível,
+      // não uma imprecisão de convergência.
+      if (dot(uDir, toL) <= 0.0 || dot(uDir, toP) <= 0.0) { continue; }
+
+      // A luz chega ao receptor vindo de R, não do centro da esfera.
+      let toReceiverFromR = normalize(r - pos);
+      let ndotSurface = dot(n, toReceiverFromR);
+      if (ndotSurface <= 0.0) { continue; }
+
+      var attenL: f32;
+      var distL: f32;
+      if (isDirectional) {
+        attenL = 1.0;
+        distL = 1.0e29;
+      } else {
+        let deltaL = lightPos - r;
+        let distSqL = dot(deltaL, deltaL);
+        if (distSqL > range * range) { continue; }
+        distL = sqrt(distSqL);
+        attenL = windowedInverseSquare(distSqL, range);
+        let coneCos = light.row3.y;
+        if (coneCos > -1.0) {
+          let cosAxis = -dot(toL, lightAxis);
+          if (cosAxis < coneCos) { continue; }
+          attenL *= min(1.0, (cosAxis - coneCos) / light.row3.z);
+        }
+      }
+      if (attenL <= 0.0) { continue; }
+
+      // Segunda perna, R → receptor: mesma janela, mesmo range da luz
+      // original — sem constante nova, a luz não viaja além do alcance que
+      // já tinha antes de quicar.
+      let distP = length(pos - r);
+      let attenP = windowedInverseSquare(distP * distP, range);
+      if (attenP <= 0.0) { continue; }
+
+      let lightColor = vec3f(light.row1.w, light.row2.x, light.row2.y);
+      let intensity = light.row2.z;
+      let tint = mirror.row7.yzw * mirror.row9.x;
+      let energy = intensity * attenL * attenP * ndotSurface;
+      if (energy < shadowThreshold) { continue; }
+
+      let originL = r + uDir * SHADOW_BIAS;
+      if (occludedBy(originL, toL, distL, mOwner)) { continue; }
+      // Encolhido por SHADOW_BIAS no destino, não na origem: ao contrário
+      // de toda outra sonda de sombra desta engine, o destino aqui É a
+      // própria superfície receptora, não uma luz — sem encolher, ruído de
+      // ponto flutuante ocasionalmente autobloqueia perto do próprio pos.
+      if (occludedBy(originL, toP, distP - SHADOW_BIAS, mOwner)) { continue; }
+
+      color += lightColor * tint * energy;
+    }
+  }
+  return color;
+}
+
 fn shadeCore(
   pos: vec3f, nIn: vec3f, viewDir: vec3f,
   albedo: vec3f, emissive: vec3f, emissiveStrength: f32,
@@ -583,10 +720,7 @@ fn shadeCore(
     if (kind == LIGHT_DIRECTIONAL) {
       attenuation = 1.0;
     } else {
-      let distSq = distance * distance;
-      let ratio = distSq / (range * range);
-      let window = max(0.0, 1.0 - ratio * ratio);
-      attenuation = (window * window * HALF_POWER_SQ) / (distSq + HALF_POWER_SQ);
+      attenuation = windowedInverseSquare(distance * distance, range);
       if (coneCos > -1.0) {
         let cosAxis = -dot(lDir, lightAxis);
         if (cosAxis < coneCos) {
@@ -633,6 +767,7 @@ fn shadeCore(
     }
   }
 
+  color += sphereMirrorBounce(pos, n, ownerId, shadowThreshold);
   color += emissive * emissiveStrength;
   return color;
 }
@@ -1274,6 +1409,7 @@ export class ShadingPass {
       sunWashIntensity: number;
       gridSize: number;
       doubleReflections: boolean;
+      sphereMirrorBounce: boolean;
     },
   ): void {
     if (this.pipeline === null || this.bindGroup === null) return;
@@ -1327,6 +1463,7 @@ export class ShadingPass {
       sunWashIntensity: number;
       gridSize: number;
       doubleReflections: boolean;
+      sphereMirrorBounce: boolean;
     },
   ): void {
     const d = this.uniformData;
@@ -1345,6 +1482,7 @@ export class ShadingPass {
     d[o++] = options.rampWeight; d[o++] = options.rampExposure; d[o++] = options.emissiveRange; d[o++] = options.sunWashIntensity;
     d[o++] = this.lights.lightCount; d[o++] = this.lights.occluderCount; d[o++] = sky.starCount; d[o++] = this.edgeNearCount;
     d[o++] = this.edgeFarCount; d[o++] = this.colCount; d[o++] = this.rowCount; d[o++] = options.sunWashSize;
+    d[o++] = options.sphereMirrorBounce && this.lights.hasSphereMirror ? 1 : 0; d[o++] = 0; d[o++] = 0; d[o++] = 0;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, d);
   }
