@@ -1,15 +1,14 @@
-import {settings} from "../../config";
 import {fromHex, type Rgb} from "../../math/color";
 import type {Framebuffer} from "../../render/framebuffer";
 import {COLOR, GLYPH} from "../../render/palette";
 import {drawBox, drawFill, drawText, OVERLAY_DEPTH} from "../../render/text";
-import type {Viewport} from "../../render/viewport";
+import type {UiViewport} from "../../render/ui-viewport";
 import {formatValue, type MenuGroup, type MenuItem} from "./model";
 
 /**
- * O menu desenhado na própria grade de caracteres.
+ * O menu desenhado em caracteres, na grade da interface.
  *
- * Escrever no framebuffer, e não em HTML por cima dele, é o que faz o menu
+ * Escrever num framebuffer, e não em HTML por cima do canvas, é o que faz o menu
  * receber bloom, scanline e vinheta junto com a cena: o visual de terminal CRT
  * não é imitado, é o mesmo caminho de render. O painel em DOM que isto substitui
  * tinha o problema oposto — flutuava sobre a cena sem pertencer a ela, e a folha
@@ -29,8 +28,14 @@ export const MENU_COLORS = {
   DIM: fromHex("#3a5a6b"),
 } as const;
 
-/** Escurece a cena atrás sem apagar: o fundo continua sendo lido. */
-const BACKDROP_ALPHA = 0.9;
+/**
+ * Quase sólido: a cena ainda se adivinha por trás, sem atrapalhar a leitura.
+ * As células com texto são opacas de propósito (`Framebuffer.opaqueOverlay`),
+ * senão o ASCII da cena apareceria nos vãos do glifo. Por isso o valor tem que
+ * ficar perto de 1: quanto mais baixo, mais o fundo dos vãos (opaco) destoa do
+ * das células vazias (translúcido) e vira um xadrez sob o que se quer ler.
+ */
+const BACKDROP_ALPHA = 0.95;
 
 /**
  * Largura do painel lateral do editor, em colunas.
@@ -41,6 +46,14 @@ const BACKDROP_ALPHA = 0.9;
  */
 export const PANEL_WIDTH = 36;
 
+/**
+ * Abaixo destas colunas de UI a coluna de grupos não cabe ao lado de uma
+ * lista legível (grupos + rótulo + trilha + valor somam ~54), e o menu troca
+ * para o layout compacto: um seletor de grupo numa linha só, lista embaixo.
+ */
+export const COMPACT_BELOW_COLS = 58;
+
+const MAX_COMPACT_WIDTH = 54;
 const MAX_WIDTH = 76;
 const MAX_HEIGHT = 34;
 const MIN_WIDTH = 30;
@@ -63,6 +76,11 @@ export interface MenuLayout {
   /** Onde a barra do slider começa e quanto ela mede, em colunas. */
   trackCol: number;
   trackWidth: number;
+  /**
+   * Grupos num seletor de uma linha (`◄ Grupo ►`) em vez de coluna lateral.
+   * Só o menu de pausa em grade estreita; o painel do editor nunca tem grupos.
+   */
+  compact: boolean;
 }
 
 /**
@@ -72,16 +90,13 @@ export interface MenuLayout {
  * divergiriam no primeiro ajuste de largura, e o menu passaria a responder uma
  * linha acima do que mostra.
  */
-export const computeLayout = (viewport: Viewport): MenuLayout => {
-  // Compensa o encolhimento de célula do Render Scale: mais colunas cabendo
-  // na mesma janela física fariam a caixa do menu, em pixels, encolher junto
-  // — escalar os tetos pelo mesmo fator mantém a área física ~constante.
-  // Nunca abaixo do piso, para a lista de grupos não perder itens em escala
-  // baixa (ver `MIN_HEIGHT`).
-  const maxWidth = Math.max(MIN_WIDTH, Math.round(MAX_WIDTH * settings.renderScale));
-  const maxHeight = Math.max(MIN_HEIGHT, Math.round(MAX_HEIGHT * settings.renderScale));
-  const width = Math.min(maxWidth, Math.max(MIN_WIDTH, viewport.colCount - 4));
-  const height = Math.min(maxHeight, Math.max(MIN_HEIGHT, viewport.rowCount - 2));
+export const computeLayout = (viewport: UiViewport): MenuLayout => {
+  if (viewport.colCount < COMPACT_BELOW_COLS) return computeCompactLayout(viewport);
+
+  // A grade de UI tem célula de tamanho fixo, então os tetos em células já são
+  // tamanho físico constante — não há mais o que compensar do Render Scale.
+  const width = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, viewport.colCount - 4));
+  const height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, viewport.rowCount - 2));
   const col = Math.floor((viewport.colCount - width) / 2);
   const row = Math.floor((viewport.rowCount - height) / 2);
 
@@ -103,6 +118,39 @@ export const computeLayout = (viewport: Viewport): MenuLayout => {
     visibleRows: height - 5,
     trackCol,
     trackWidth: Math.max(6, itemWidth - LABEL_WIDTH - VALUE_WIDTH - 4),
+    compact: false,
+  };
+};
+
+/**
+ * A mesma caixa com os grupos numa linha só, no topo, e a lista ocupando a
+ * largura inteira. A trilha do slider aceita ficar mais curta que no layout
+ * largo — é o que deixa um iframe de celular usar o menu, mesmo apertado.
+ */
+const computeCompactLayout = (viewport: UiViewport): MenuLayout => {
+  const width = Math.min(MAX_COMPACT_WIDTH, Math.max(2, viewport.colCount - 2));
+  const height = Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, viewport.rowCount - 2));
+  const col = Math.floor((viewport.colCount - width) / 2);
+  const row = Math.floor((viewport.rowCount - height) / 2);
+
+  const itemCol = col + 2;
+  const itemWidth = width - 4;
+
+  return {
+    col,
+    row,
+    width,
+    height,
+    groupCol: col,
+    groupFirstRow: row + 1,
+    itemCol,
+    itemWidth,
+    itemFirstRow: row + 3,
+    // Título, borda, seletor, régua, ajuda e a borda de baixo saem da área útil.
+    visibleRows: Math.max(1, height - 5),
+    trackCol: itemCol + LABEL_WIDTH + 1,
+    trackWidth: Math.max(4, itemWidth - LABEL_WIDTH - VALUE_WIDTH - 4),
+    compact: true,
   };
 };
 
@@ -116,13 +164,10 @@ export const computeLayout = (viewport: Viewport): MenuLayout => {
  * navegar a partir dela.
  */
 export const computePanelLayout = (
-  viewport: Viewport,
+  viewport: UiViewport,
   itemCount: number,
 ): MenuLayout => {
-  // Mesma compensação de `computeLayout`: sem ela, o painel também encolhia
-  // fisicamente ao subir o Render Scale.
-  const maxWidth = Math.max(24, Math.round(PANEL_WIDTH * settings.renderScale));
-  const width = Math.min(maxWidth, Math.max(24, viewport.colCount - 2));
+  const width = Math.min(PANEL_WIDTH, Math.max(24, viewport.colCount - 2));
   // Título, moldura e uma linha de folga; o resto é lista.
   const height = Math.min(viewport.rowCount - 2, itemCount + 4);
   const col = viewport.colCount - width - 1;
@@ -147,6 +192,7 @@ export const computePanelLayout = (
     visibleRows: Math.max(1, height - 3),
     trackCol: itemCol + LABEL_WIDTH + 1,
     trackWidth: Math.max(6, itemWidth - LABEL_WIDTH - VALUE_WIDTH - 4),
+    compact: false,
   };
 };
 
@@ -165,6 +211,8 @@ export const drawPanel = (
 ): void => {
   const { col, row, width, height } = layout;
 
+  // Tudo o que o painel escreve sai opaco: ver `Framebuffer.opaqueOverlay`.
+  framebuffer.opaqueOverlay = true;
   drawFill(
     framebuffer,
     col,
@@ -184,6 +232,7 @@ export const drawPanel = (
     hoverItem,
     focusRing: true,
   });
+  framebuffer.opaqueOverlay = false;
 };
 
 const plot = (
@@ -229,6 +278,8 @@ export const drawMenu = (
 ): void => {
   const { col, row, width, height } = layout;
 
+  // Tudo o que o menu escreve sai opaco: ver `Framebuffer.opaqueOverlay`.
+  framebuffer.opaqueOverlay = true;
   drawFill(
     framebuffer,
     col,
@@ -251,21 +302,26 @@ export const drawMenu = (
     0.4,
   );
 
-  // Régua vertical separando grupos de itens, emendando na moldura.
-  const dividerCol = col + GROUP_WIDTH + 1;
-  plot(framebuffer, dividerCol, row, GLYPH.BOX_HD, MENU_COLORS.BORDER);
-  for (let y = row + 1; y < row + height - 1; y += 1) {
-    plot(framebuffer, dividerCol, y, GLYPH.BOX_V, MENU_COLORS.BORDER);
-  }
-  plot(
-    framebuffer,
-    dividerCol,
-    row + height - 1,
-    GLYPH.BOX_HU,
-    MENU_COLORS.BORDER,
-  );
+  if (layout.compact) {
+    drawGroupSwitcher(framebuffer, layout, state);
+  } else {
+    // Régua vertical separando grupos de itens, emendando na moldura.
+    const dividerCol = col + GROUP_WIDTH + 1;
+    plot(framebuffer, dividerCol, row, GLYPH.BOX_HD, MENU_COLORS.BORDER);
+    for (let y = row + 1; y < row + height - 1; y += 1) {
+      plot(framebuffer, dividerCol, y, GLYPH.BOX_V, MENU_COLORS.BORDER);
+    }
+    plot(
+      framebuffer,
+      dividerCol,
+      row + height - 1,
+      GLYPH.BOX_HU,
+      MENU_COLORS.BORDER,
+    );
 
-  drawGroups(framebuffer, layout, state);
+    drawGroups(framebuffer, layout, state);
+  }
+
   drawItems(framebuffer, layout, {
     items: state.items,
     itemIndex: state.itemIndex,
@@ -274,10 +330,54 @@ export const drawMenu = (
     focusRing: !state.onGroups,
   });
 
-  const hint = state.onGroups
-    ? "▲▼ group   ► select   Esc close"
-    : "▲▼ item   ◄► adjust   Enter apply   Tab go back   Esc close";
-  drawText(framebuffer, col + 2, row + height - 2, hint, MENU_COLORS.DIM);
+  const hint = layout.compact
+    ? state.onGroups
+      ? "◄► group   ▼ select   Esc close"
+      : "▲▼ item  ◄► adjust  Tab back  Esc close"
+    : state.onGroups
+      ? "▲▼ group   ► select   Esc close"
+      : "▲▼ item   ◄► adjust   Enter apply   Tab go back   Esc close";
+  drawText(
+    framebuffer,
+    col + 2,
+    row + height - 2,
+    hint.slice(0, width - 4),
+    MENU_COLORS.DIM,
+  );
+  framebuffer.opaqueOverlay = false;
+};
+
+/**
+ * O seletor de grupo do layout compacto: `◄ Nome ►`, centrado, com a régua
+ * horizontal embaixo emendando nas duas bordas.
+ */
+const drawGroupSwitcher = (
+  framebuffer: Framebuffer,
+  layout: MenuLayout,
+  state: DrawState,
+): void => {
+  const { col, row, width } = layout;
+  const y = layout.groupFirstRow;
+  const color = state.onGroups ? MENU_COLORS.FOCUS : MENU_COLORS.VALUE;
+  const label = state.groups[state.groupIndex]?.label ?? "";
+
+  plot(framebuffer, col + 2, y, GLYPH.ARROW_LEFT, color, state.onGroups ? 0.3 : 0);
+  plot(framebuffer, col + width - 3, y, GLYPH.ARROW_RIGHT, color, state.onGroups ? 0.3 : 0);
+  drawText(
+    framebuffer,
+    col + Math.floor((width - label.length) / 2),
+    y,
+    label,
+    color,
+    1,
+    state.onGroups ? 0.3 : 0,
+  );
+
+  plot(framebuffer, col, row + 2, GLYPH.BOX_VR, MENU_COLORS.BORDER);
+  for (let x = col + 1; x < col + width - 1; x += 1) {
+    plot(framebuffer, x, row + 2, GLYPH.BOX_H, MENU_COLORS.BORDER);
+  }
+  plot(framebuffer, col + width - 1, row + 2, GLYPH.BOX_VL, MENU_COLORS.BORDER);
 };
 
 const drawGroups = (

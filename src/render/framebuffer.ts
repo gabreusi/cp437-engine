@@ -167,6 +167,17 @@ export class Framebuffer {
   readonly fuse: Uint8Array<ArrayBuffer>;
   private readonly depth: Float32Array;
 
+  /**
+   * Toda célula escrita por `plot` sai opaca, como se `opaque=true`.
+   *
+   * É como a interface faz um painel sólido: a grade de UI é composta por cima
+   * da cena, e uma célula transparente (todo glifo de texto, moldura ou
+   * slider) deixaria o ASCII da cena aparecer por trás. Ligado por quem
+   * desenha o painel, só durante o desenho — o retículo e a ajuda que ficam
+   * sobre a cena nua precisam continuar transparentes.
+   */
+  opaqueOverlay = false;
+
   // G-buffer: um Float32Array por textura RGBA32F que `ShadingPass` sobe.
   // Só têm valor definido onde `cells.a === 0` (célula adiada).
   readonly gPos: Float32Array<ArrayBuffer>;
@@ -253,6 +264,7 @@ export class Framebuffer {
 
     const offset = index * 4;
     const hadContent = this.cells[offset + 1] !== 0;
+    const solid = opaque || this.opaqueOverlay;
 
     if (fuse && hadContent) {
       this.depth[index] = depth;
@@ -287,7 +299,7 @@ export class Framebuffer {
     this.colors[offset] = toByte(color.r);
     this.colors[offset + 1] = toByte(color.g);
     this.colors[offset + 2] = toByte(color.b);
-    this.colors[offset + 3] = opaque || staysOpaque ? 255 : 0;
+    this.colors[offset + 3] = solid || staysOpaque ? 255 : 0;
   }
 
   /**

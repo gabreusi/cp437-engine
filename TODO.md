@@ -11,6 +11,5 @@ mecanismo de lista).
 
 ### Para depois
  - Adicionar configuração de 'sharpness' (age como um verdadeiro render-scale);
- - Continua difícil mexer no menu: achar alguma solução;
  - Menu lateral de edição corta o nome do material do objeto;
  - Mais formas de objetos;

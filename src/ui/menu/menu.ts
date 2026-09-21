@@ -3,6 +3,7 @@ import type { LightWorld } from "../../light/world";
 import type { Camera } from "../../render/camera";
 import type { Framebuffer } from "../../render/framebuffer";
 import type { Rasterizer } from "../../render/rasterizer";
+import type { UiViewport } from "../../render/ui-viewport";
 import type { Viewport } from "../../render/viewport";
 import type { World } from "../../scene/world";
 import type { Cursor } from "../cursor";
@@ -17,8 +18,9 @@ import type { MenuGroup } from "./model";
  * Substitui o painel em DOM, e a troca não é estética. O painel vivia fora da
  * cena: tinha folha de estilo própria, era um segundo lugar onde a paleta
  * morava, e ficava sobre o canvas sem pertencer a ele. Este é desenhado na
- * mesma grade de caracteres, passa pelo mesmo bloom e pelas mesmas scanlines, e
- * some da existência quando fechado.
+ * grade de caracteres da interface (`render/ui-viewport.ts`, célula de tamanho
+ * fixo — legível mesmo num iframe pequeno), passa pelo mesmo bloom e pelas
+ * mesmas scanlines da cena, e some da existência quando fechado.
  *
  * `Esc` abre, porque `Esc` já era o que devolvia o ponteiro — o navegador impõe
  * isso, e é exatamente o gesto de pausar.
@@ -35,6 +37,12 @@ const EDIT_GROUP = "Objects";
 
 export class Menu {
   open = false;
+
+  /**
+   * Desligado (`menu=0` na URL), o menu não abre por gesto nenhum — nem `Esc`,
+   * nem a saída da captura do ponteiro.
+   */
+  enabled = true;
 
   private groupIndex = 0;
   private onGroups = true;
@@ -67,10 +75,13 @@ export class Menu {
   update(
     events: UiEvents,
     viewport: Viewport,
+    ui: UiViewport,
     camera: Camera,
     rasterizer: Rasterizer,
     lights: LightWorld,
   ): void {
+    if (!this.enabled) return;
+
     // Sair da captura do ponteiro abre o menu: é o mesmo gesto de pausa, e
     // ficar com o mouse solto e sem menu não serve para nada. Vem por aqui
     // e não pela tecla porque o navegador consome o `Esc` do Pointer Lock.
@@ -90,7 +101,7 @@ export class Menu {
     }
 
     this.itemList.setItems(this.groups[this.groupIndex]?.items() ?? []);
-    this.layout = computeLayout(viewport);
+    this.layout = computeLayout(ui);
     this.manipulator.update(
       this.editing ? this.world.selected : null,
       camera,
@@ -144,15 +155,32 @@ export class Menu {
   }
 
   private handleGroupKey(code: string): void {
+    // No layout compacto os grupos são um seletor horizontal: as setas
+    // laterais o percorrem, e é para baixo que se entra na lista.
+    if (this.layout?.compact) {
+      switch (code) {
+        case "ArrowLeft":
+          this.stepGroup(-1);
+          break;
+        case "ArrowRight":
+          this.stepGroup(1);
+          break;
+        case "ArrowDown":
+        case "Enter":
+        case "Tab":
+          this.onGroups = false;
+          this.itemList.ensureFocusable(1);
+          break;
+      }
+      return;
+    }
+
     switch (code) {
       case "ArrowUp":
-        this.groupIndex =
-          (this.groupIndex + this.groups.length - 1) % this.groups.length;
-        this.resetItems();
+        this.stepGroup(-1);
         break;
       case "ArrowDown":
-        this.groupIndex = (this.groupIndex + 1) % this.groups.length;
-        this.resetItems();
+        this.stepGroup(1);
         break;
       case "ArrowRight":
       case "Enter":
@@ -161,6 +189,12 @@ export class Menu {
         this.itemList.ensureFocusable(1);
         break;
     }
+  }
+
+  private stepGroup(direction: -1 | 1): void {
+    this.groupIndex =
+      (this.groupIndex + direction + this.groups.length) % this.groups.length;
+    this.resetItems();
   }
 
   private resetItems(): void {
@@ -186,8 +220,10 @@ export class Menu {
     const layout = this.layout;
     if (layout === null) return;
 
-    const col = this.cursor.col;
-    const rowIndex = this.cursor.row;
+    // Os widgets vivem na grade da interface; a cena, na grade dela. O mesmo
+    // ponteiro tem uma posição em cada uma.
+    const col = this.cursor.uiCol;
+    const rowIndex = this.cursor.uiRow;
 
     if (!events.down) {
       this.itemList.release();
@@ -197,7 +233,7 @@ export class Menu {
     // Um slider agarrado continua respondendo à coluna do cursor sozinha,
     // não importa a linha: exigir a linha certa é o que fazia o arrasto
     // lateral "travar" ao menor tremor vertical do mouse.
-    if (events.down && this.itemList.continueDrag(this.cursor.exactCol, layout)) {
+    if (events.down && this.itemList.continueDrag(this.cursor.uiExactCol, layout)) {
       return;
     }
 
@@ -216,15 +252,7 @@ export class Menu {
     this.hoverCol = -1;
     this.hoverRow = -1;
     if (this.editing) {
-      this.handleScenePointer(
-        events,
-        viewport,
-        col,
-        rowIndex,
-        camera,
-        rasterizer,
-        lights,
-      );
+      this.handleScenePointer(events, viewport, camera, rasterizer, lights);
     }
   }
 
@@ -234,8 +262,18 @@ export class Menu {
     col: number,
     row: number,
   ): void {
+    // Seletor de grupo do layout compacto: setas nas pontas, o meio entra na lista.
+    if (layout.compact && row === layout.groupFirstRow) {
+      this.itemList.hoverItem = -1;
+      if (!events.pressed) return;
+      if (col <= layout.col + 4) this.stepGroup(-1);
+      else if (col >= layout.col + layout.width - 5) this.stepGroup(1);
+      this.onGroups = true;
+      return;
+    }
+
     // Coluna dos grupos.
-    if (col <= layout.col + layout.width - layout.itemWidth - 3) {
+    if (!layout.compact && col <= layout.col + layout.width - layout.itemWidth - 3) {
       const index = row - layout.groupFirstRow;
       this.itemList.hoverItem = -1;
       if (events.pressed && index >= 0 && index < this.groups.length) {
@@ -250,7 +288,7 @@ export class Menu {
       events,
       layout,
       col,
-      this.cursor.exactCol,
+      this.cursor.uiExactCol,
       row,
       () => this.refreshItems(),
     );
@@ -266,20 +304,18 @@ export class Menu {
   private handleScenePointer(
     events: UiEvents,
     viewport: Viewport,
-    col: number,
-    row: number,
     camera: Camera,
     rasterizer: Rasterizer,
     lights: LightWorld,
   ): void {
-    this.hoverCol = col;
-    this.hoverRow = row;
+    this.hoverCol = this.cursor.sceneCol;
+    this.hoverRow = this.cursor.sceneRow;
 
     // A célula inteira serve para saber onde desenhar a alça (`hoverCol`
     // acima); mirar e arrastar usam a posição exata, ou o objeto andaria
     // aos saltos de uma célula toda vez que o mouse cruzasse a borda dela.
-    const exactCol = this.cursor.exactCol;
-    const exactRow = this.cursor.exactRow;
+    const exactCol = this.cursor.sceneExactCol;
+    const exactRow = this.cursor.sceneExactRow;
 
     if (events.pressed) {
       this.manipulator.press(
@@ -315,21 +351,19 @@ export class Menu {
     );
   }
 
-  draw(framebuffer: Framebuffer, rasterizer: Rasterizer): void {
+  /**
+   * As setas de face são geometria da cena e saem na grade dela; o menu sai na
+   * da interface, que já está por cima — se o objeto estiver atrás do menu,
+   * quem manda é o menu, sem precisar disputar profundidade.
+   */
+  draw(scene: Framebuffer, ui: Framebuffer, rasterizer: Rasterizer): void {
     const layout = this.layout;
     if (!this.open || layout === null) return;
 
-    // As setas de face saem antes do painel: se o objeto estiver atrás do
-    // menu, quem manda é o menu.
     if (this.editing)
-      this.manipulator.draw(
-        framebuffer,
-        rasterizer,
-        this.hoverCol,
-        this.hoverRow,
-      );
+      this.manipulator.draw(scene, rasterizer, this.hoverCol, this.hoverRow);
 
-    drawMenu(framebuffer, layout, {
+    drawMenu(ui, layout, {
       groups: this.groups,
       items: this.itemList.current,
       groupIndex: this.groupIndex,

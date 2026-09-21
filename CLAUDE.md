@@ -46,8 +46,18 @@ SurfacePen.style       → G-buffer (posição, normal, material, forma); sem lu
 Framebuffer (CPU)      → 2 planos RGBA8 [glifo, alpha, emissivo, 255]/[r,g,b,255] + G-buffer
 ──── fronteira CPU/GPU ─────────────────────────────────────────────
 ShadingPass (WGSL, compute) → shadeSurface + ramp: luminância + textura → glifo, por célula
-GpuPresenter (WebGPU)  → background → grid → bloom → composite
+GpuPresenter (WebGPU)  → background → grid → UiLayer (grade da interface) → bloom → composite
 ```
+
+Menu, painel do editor e retículo **não** escrevem no framebuffer da cena: têm
+uma segunda grade (`render/ui-viewport.ts`), com célula fixa em px CSS, o
+próprio `Framebuffer` (`uiFramebuffer` em `main.ts`) e o próprio atlas
+(`render/gpu/ui-layer.ts`, que reusa `GridPass`). Só células resolvidas, sem
+`ShadingPass`. Setas de face do `Manipulator` continuam na grade da cena.
+A grade de UI é composta **por cima** da cena, então célula transparente deixa o
+ASCII da cena vazar por baixo do glifo: painéis desenham com
+`framebuffer.opaqueOverlay = true` (o vão do glifo vira o fundo do painel, ver
+`GridPass.setOpaqueFill`). Retículo e ajuda sobre a cena nua ficam transparentes.
 
 ## Contratos que todo código novo respeita
 
@@ -58,6 +68,13 @@ registre luz em `render`: iluminação não pode depender da ordem da lista da
 cena. Pelo mesmo motivo, nada que dependa de encontrar superfície já desenhada
 (`Fragment.fuse`) vai em `render` — só em `renderGlow`, senão o resultado muda
 conforme a ordem dos objetos.
+
+**Duas grades, um cursor** — `Cursor` guarda a posição em **px CSS** e a lê nas
+duas grades: `sceneCol/Row/ExactCol/ExactRow` para mirar em objetos,
+`uiCol/Row/ExactCol/ExactRow` para widgets. Nunca use `scene*` para hit-test
+de menu, nem `ui*` para mira: as células têm tamanhos bem diferentes.
+`computeLayout`/`computePanelLayout` recebem `UiViewport`; nada de menu depende
+de `renderScale`.
 
 **`RenderContext`** — `{ camera, viewport, rasterizer, time, lights, shading }`.
 Reaproveitado; não guarde referência entre quadros.
@@ -134,6 +151,8 @@ herdar de.
 | novo tipo de objeto | `scene/entities/<novo>.ts` com `EntityKindDef` → registre em `ENTITY_KINDS` e `ENTITY_ORDER` (`scene/world.ts`) → `ENTITY` em `entity.ts` |
 | novo glifo | `render/palette.ts` (`GLYPH`, `CHARSET` — tabela CP437 real); desenhados à mão em `render/atlas-canvas.ts` (`PAINTERS`, indexado por caractere) |
 | efeito de tela | `render/gpu/passes/` + ordem em `gpu/presenter.ts` |
+| parâmetro de URL (embed) | `url-config.ts` (lê) e `embed-url.ts` (escreve); campo de `Settings` já funciona sozinho pelo nome |
+| tamanho/layout do menu | `render/ui-viewport.ts` (célula) e `ui/menu/draw.ts` (`computeLayout`, compacto abaixo de `COMPACT_BELOW_COLS`) |
 | como a luz vira caractere | `render/ramp.ts` (rampa e texturas) |
 | escolha de glifo por forma (aresta, disco, cobertura de preenchimento) | `render/glyph-shape.ts` (amostragem, contraste, vizinho mais próximo) + candidatos em `render/ramp.ts` |
 | matemática de luz | `render/gpu/passes/shading.ts` (kernel de sombreamento, reflexo e céu, em WGSL — única implementação, não há mais versão CPU) e `light/trace.ts` (raio×esfera/caixa; ainda roda na CPU para as sondas de `light/mirror-bounce.ts`) |
@@ -159,11 +178,21 @@ espaço. Ver "O nome" no README.
   No `load`, o salvo é mesclado sobre `createEntity(kind, defaults())` — campos
   novos nascem com valor sensato em cenas antigas.
 
+## URL, embed e persistência
+
+`url-config.ts` lê a URL uma vez, no topo de `main.ts`. Qualquer campo de
+`Settings` vira parâmetro (tipo pelo default; números são limitados à faixa do
+slider por `applySettingOverrides` — por isso um ajuste novo só precisa de
+slider com `key`). URL com settings ou `scene` desliga o `localStorage`
+(`persistence.ts`) na sessão, salvo `persist=1`. `main.ts` usa top-level `await`
+para decodificar a cena antes do primeiro quadro (`scene/scene-codec.ts`). O
+menu tem "Copy embed URL" (`embed-url.ts`). Lista de parâmetros: README, "Embedding".
+
 ## Depuração
 
 `window.engine` em dev (`main.ts`): `camera`, `settings`, `scene`, `world`,
 `lights`, `menu`, `editor`, `manipulator`, `cursor`, `rasterizer`, `presenter`,
-`input`, `freecam`, `capture(escala)`, `dumpGlyphs()`, `countByColor()`,
+`input`, `freecam`, `getUiFramebuffer()`, `getUiViewport()`, `capture(escala)`, `dumpGlyphs()`, `countByColor()`,
 `showCharset()`, `setOverlay(fn)`, `step(dt)`.
 
 `step()` é essencial: em aba de segundo plano o `requestAnimationFrame` não
@@ -181,7 +210,9 @@ navegador você mesmo se o usuário pedir o contrário.
 
 ## Custo
 
-180 colunas × 120 fileiras no teto (`render/viewport.ts`). O orçamento por
+180 colunas × 90 fileiras no teto (`render/viewport.ts`), e piso de célula de
+`settings.minCellWidth` (6 px CSS) — janela pequena tem menos colunas, não células
+menores. O orçamento por
 fragmento é ~100× o de um shader de pixel, e é isso que torna traçado de raio na
 CPU viável. Referência: cena demo ≈ 4,4 ms de CPU/quadro; 13 luzes e 16 corpos
 ≈ 6,4 ms. O HUD mostra `sceneMs`, luzes e occluders — **é o número a vigiar** ao

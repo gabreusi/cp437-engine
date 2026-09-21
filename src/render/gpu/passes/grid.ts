@@ -1,6 +1,7 @@
 import { EMISSIVE_RANGE } from "../../framebuffer";
 import { CELL_ASPECT } from "../../viewport";
 import { FULLSCREEN_VERTEX_WGSL, drawFullscreen } from "../fullscreen";
+import type { Rgb } from "../../../math/color";
 import type { GlyphAtlas } from "../atlas";
 
 /**
@@ -15,6 +16,9 @@ struct Params {
   emissiveRange: f32,
   _pad0: f32,
   padFrac: vec2f,
+  // rgb: cor do vão de uma célula opaca. w: 1 mistura o glifo com esse fundo
+  // pela cobertura (interface); 0 mantém o corte seco de sempre (cena).
+  opaque: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -53,7 +57,9 @@ fn fs_main(@location(0) uv: vec2f) -> @location(0) vec4f {
   let rgb = colorData.rgb * (1.0 + data.b * p.emissiveRange);
 
   let finalAlpha = select(coverage * alpha, alpha, opaque);
-  let finalRgb = select(rgb, vec3f(0.0), opaque && coverage <= 0.0);
+  let hardRgb = select(rgb, p.opaque.rgb, opaque && coverage <= 0.0);
+  let softRgb = mix(p.opaque.rgb, rgb, coverage);
+  let finalRgb = select(hardRgb, softRgb, opaque && p.opaque.w > 0.5);
 
   if (finalAlpha <= 0.0) { discard; }
   return vec4f(finalRgb, finalAlpha);
@@ -64,7 +70,7 @@ export class GridPass {
   private readonly pipeline: GPURenderPipeline;
   private readonly sampler: GPUSampler;
   private readonly paramsBuffer: GPUBuffer;
-  private readonly paramsData = new Float32Array(8);
+  private readonly paramsData = new Float32Array(12);
 
   private atlas: GlyphAtlas | null = null;
   private bindGroup: GPUBindGroup | null = null;
@@ -112,6 +118,21 @@ export class GridPass {
       size: this.paramsData.byteLength,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+  }
+
+  /**
+   * Cor que aparece nos vãos de uma célula opaca (onde o glifo não cobre).
+   *
+   * A cena deixa preto e corta seco na borda do glifo. A interface passa a cor
+   * do fundo do menu e `soft`: sem isso o fundo de cada célula com texto seria
+   * outro que não o do painel, e a cena vazaria por baixo de cada letra.
+   */
+  setOpaqueFill(color: Rgb, soft: boolean): void {
+    const d = this.paramsData;
+    d[8] = color.r;
+    d[9] = color.g;
+    d[10] = color.b;
+    d[11] = soft ? 1 : 0;
   }
 
   setAtlas(atlas: GlyphAtlas): void {

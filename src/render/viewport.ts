@@ -9,6 +9,12 @@
  * caracteres cabem na tela, então mexe direto no custo de CPU por quadro (ver
  * README, "Custo") — não é um multiplicador de pixel do backing store, esse
  * é só `dpr`.
+ *
+ * Os tetos de colunas/fileiras só seguram telas grandes; numa janela pequena
+ * (um iframe de 624×500) 180 colunas dão células de ~3,5 px, ilegíveis como
+ * caractere. `minCellWidth` (`settings.minCellWidth`, em px CSS) é o piso: corta
+ * a contagem de células em vez de encolhê-las — a cena fica mais ASCII e mais
+ * barata, e em tela grande não muda nada.
  */
 
 export const MAX_COLS = 180;
@@ -42,11 +48,13 @@ export const computeViewport = (
   availableHeight: number,
   dpr: number,
   cellScale: number,
+  minCellWidth: number,
 ): Viewport => {
-  // A célula é grande o bastante para respeitar os dois tetos ao mesmo tempo.
+  // A célula é grande o bastante para respeitar os dois tetos e o piso.
   const cellWidth = Math.max(
     availableWidth / (MAX_COLS * cellScale),
     availableHeight / (MAX_ROWS * cellScale * CELL_ASPECT),
+    minCellWidth,
   );
   const cellHeight = cellWidth * CELL_ASPECT;
 

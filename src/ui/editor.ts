@@ -4,6 +4,7 @@ import type { Camera } from "../render/camera";
 import type { Framebuffer } from "../render/framebuffer";
 import type { Rasterizer } from "../render/rasterizer";
 import { drawText } from "../render/text";
+import type { UiViewport } from "../render/ui-viewport";
 import type { Viewport } from "../render/viewport";
 import type { World } from "../scene/world";
 import type { Cursor } from "./cursor";
@@ -56,26 +57,10 @@ export class Editor {
     private readonly cursor: Cursor,
   ) {}
 
-  private get col(): number {
-    return this.cursor.col;
-  }
-
-  private get row(): number {
-    return this.cursor.row;
-  }
-
-  /** Posição exata do cursor, para mira e slider — ver `Cursor.exactCol`. */
-  private get exactCol(): number {
-    return this.cursor.exactCol;
-  }
-
-  private get exactRow(): number {
-    return this.cursor.exactRow;
-  }
-
   update(
     events: UiEvents,
     viewport: Viewport,
+    ui: UiViewport,
     camera: Camera,
     rasterizer: Rasterizer,
     lights: LightWorld,
@@ -110,7 +95,7 @@ export class Editor {
       this.itemList.resetFocus();
     }
     this.layout =
-      items.length === 0 ? null : computePanelLayout(viewport, items.length);
+      items.length === 0 ? null : computePanelLayout(ui, items.length);
     this.manipulator.update(selected, camera, rasterizer);
 
     if (!events.down) {
@@ -123,16 +108,16 @@ export class Editor {
 
     // Um slider agarrado continua respondendo à coluna do cursor sozinha,
     // não importa a linha — mesma correção do menu de pausa, mesmo widget.
-    if (events.down && layout !== null && this.itemList.continueDrag(this.exactCol, layout)) {
+    if (events.down && layout !== null && this.itemList.continueDrag(this.cursor.uiExactCol, layout)) {
       return;
     }
 
     const insidePanel =
       layout !== null &&
-      this.col >= layout.col &&
-      this.col < layout.col + layout.width &&
-      this.row >= layout.row &&
-      this.row < layout.row + layout.height;
+      this.cursor.uiCol >= layout.col &&
+      this.cursor.uiCol < layout.col + layout.width &&
+      this.cursor.uiRow >= layout.row &&
+      this.cursor.uiRow < layout.row + layout.height;
 
     if (insidePanel) {
       this.handlePanel(events, layout);
@@ -164,7 +149,13 @@ export class Editor {
 
   /** Cursor sobre o painel lateral: os mesmos widgets do menu, no clique. */
   private handlePanel(events: UiEvents, layout: MenuLayout): void {
-    this.itemList.handlePointer(events, layout, this.col, this.exactCol, this.row);
+    this.itemList.handlePointer(
+      events,
+      layout,
+      this.cursor.uiCol,
+      this.cursor.uiExactCol,
+      this.cursor.uiRow,
+    );
   }
 
   /**
@@ -192,8 +183,8 @@ export class Editor {
         lights,
         camera,
         rasterizer,
-        this.exactCol,
-        this.exactRow,
+        this.cursor.sceneExactCol,
+        this.cursor.sceneExactRow,
       );
       // A troca de seleção reinicia o foco/rolagem sozinha, no próximo
       // `update()`, ao notar que `lastSelectedId` mudou.
@@ -214,28 +205,37 @@ export class Editor {
       this.world,
       camera,
       rasterizer,
-      this.exactCol,
-      this.exactRow,
+      this.cursor.sceneExactCol,
+      this.cursor.sceneExactRow,
       events.deltaX / viewport.cellWidth,
       events.deltaY / viewport.cellHeight,
       events.shift,
     );
   }
 
+  /**
+   * As setas são geometria da cena; o painel e a ajuda são interface e saem
+   * na grade dela, por cima — um objeto encostado na lateral não fura o painel
+   * sem precisar de ordem de desenho.
+   */
   draw(
-    framebuffer: Framebuffer,
-    viewport: Viewport,
+    scene: Framebuffer,
+    ui: Framebuffer,
+    uiViewport: UiViewport,
     rasterizer: Rasterizer,
   ): void {
     if (!this.active) return;
 
-    // Setas primeiro, painel por cima: um objeto encostado na lateral não
-    // pode furar o painel com as próprias alças.
-    this.manipulator.draw(framebuffer, rasterizer, this.col, this.row);
+    this.manipulator.draw(
+      scene,
+      rasterizer,
+      this.cursor.sceneCol,
+      this.cursor.sceneRow,
+    );
 
     if (this.layout !== null) {
       drawPanel(
-        framebuffer,
+        ui,
         this.layout,
         this.itemList.current,
         this.itemList.itemIndex,
@@ -244,12 +244,19 @@ export class Editor {
       );
     }
 
-    drawText(
-      framebuffer,
-      2,
-      viewport.rowCount - 2,
-      "Tab fly   right button look   click select   wheel turn   panel ◄► adjust   drag arrows to resize   Del remove",
-      MENU_COLORS.DIM,
-    );
+    // Numa grade estreita a ajuda inteira não cabe em uma linha: quebra em duas.
+    const lastRow = uiViewport.rowCount - 2;
+    if (uiViewport.colCount >= HINT_LINE.length + 4) {
+      drawText(ui, 2, lastRow, HINT_LINE, MENU_COLORS.DIM);
+    } else {
+      drawText(ui, 2, lastRow - 1, HINT_LINES[0], MENU_COLORS.DIM);
+      drawText(ui, 2, lastRow, HINT_LINES[1], MENU_COLORS.DIM);
+    }
   }
 }
+
+const HINT_LINES = [
+  "Tab fly   right button look   click select   wheel turn",
+  "panel ◄► adjust   drag arrows to resize   Del remove",
+] as const;
+const HINT_LINE = HINT_LINES.join("   ");

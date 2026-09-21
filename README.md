@@ -102,13 +102,18 @@ ShadingPass (GPU, compute)    shadeSurface + glyph ramp: ambient + lights
                              (shadow ray) + reflection (sky lobe, or mirror
                              ray) → luminance + texture → character
         ▼
-GpuPresenter (WebGPU)         sky → grid → bloom → composite
+GpuPresenter (WebGPU)         sky → grid → UI grid → bloom → composite
 ```
 
 The whole grid comes out in one draw call: a triangle covering the screen,
 and the fragment shader figures out which cell it landed in, reads the
 glyph and color from the two data textures `ShadingPass` produced, and
 samples the font atlas. There's no per-cell quad.
+
+The interface (menu, editor panel, reticle) isn't on this grid. It has its
+own, with a fixed cell size in CSS pixels, its own framebuffer and its own
+atlas, drawn by a second `GridPass` into the same target just before the
+bloom. See "The interface grid."
 
 ## Decisions behind the code
 
@@ -421,7 +426,7 @@ glyph is, and material is a transport for light, the same reason face
 normals don't live there either. `SurfacePen` is the bridge between light
 and character, and texture is exactly the decision that bridge makes.
 
-The menu is drawn on the character grid. The DOM panel it replaced lived
+The menu is drawn in characters. The DOM panel it replaced lived
 outside the scene: it had its own stylesheet, was a second place where the
 palette lived, and sat over the canvas without belonging to it. This one
 goes through the same bloom and the same scanlines: the CRT look comes
@@ -430,6 +435,60 @@ charset gained the ASCII table with index matching character code, plus
 Latin-1 alongside it, so an accent became a content detail instead of a
 technical limit. The blocks and frame vocabulary it draws come from CP437;
 see "The name."
+
+### The interface grid
+
+The scene wants its cell count under control (CPU cost) and lets the cell
+be whatever size is left over; the interface wants the opposite, because
+the cell size is what decides whether text reads. In a 624×500 iframe the
+scene has cells of ~6 px, and a menu written on them is unreadable. So the
+interface has its own grid (`render/ui-viewport.ts`): an integer cell size
+in device pixels (8×16 CSS px on small windows, growing to ~14×28 on large
+ones, times `uiScale`), independent of `renderScale` and of the scene's
+column cap. It reuses everything else: the same `Framebuffer` type, the
+same `drawText`/`drawBox`, the same `GridPass` pointed at another atlas and
+at a `setViewport` rectangle, before the bloom so the menu still glows.
+
+The scene also has a floor on cell width (`minCellWidth`, 6 CSS px): the
+column cap only holds back large screens, and on a small window 180 columns
+would mean cells too small to read as characters. On a big desktop screen
+the floor never engages.
+
+Below 58 interface columns the pause menu switches to a compact layout: the
+group column becomes a one-line `◄ Group ►` switcher, and the list takes the
+full width.
+
+`fovDegrees` is the FOV of the *smaller* screen axis: vertical in landscape
+(desktop unchanged), horizontal in portrait, with a 120° cap on the
+horizontal FOV so very wide windows don't turn into a fisheye
+(`verticalFovFor`, `render/camera.ts`).
+
+### Embedding
+
+The engine reads its configuration from the URL, so an iframe can ask for
+the best setup. The workflow: tune everything in the full engine, click
+**Copy embed URL** in the General group, paste it as the iframe `src`.
+
+| parameter | effect |
+| --- | --- |
+| any `Settings` field | `?bloomIntensity=0.3&sunEnabled=1`; numbers are clamped to the menu slider's range |
+| `ui` | alias of `uiScale` |
+| `scene` | `demo`, `empty`, or a scene encoded as base64url(deflate(JSON)) |
+| `cam` | `x,y,z,yaw,pitch`, angles in degrees |
+| `hud`, `menu` | `0` hides the HUD / disables the pause menu |
+| `orbit`, `orbitSpeed`, `orbitTarget` | camera circles by itself (deg/s, `x,y,z`); implies `lock=0` |
+| `lock` | `0` never captures the mouse |
+| `persist` | `1`/`0` forces reading and writing `localStorage` |
+
+Without any parameter the engine opens as it always did. A URL that carries
+settings or a scene is the source of truth for that session: it neither
+reads nor writes `localStorage` (unless `persist=1`), so the first frame
+doesn't depend on the visitor's history. Only settings that differ from the
+default are exported, to keep the URL short. A dozen objects encode to a
+few hundred characters.
+
+Pointer Lock in a cross-origin iframe needs `allow-pointer-lock` in its
+`sandbox`; for a showcase, `orbit=1&menu=0&hud=0` needs no capture at all.
 
 ### The editing decisions
 
@@ -442,9 +501,11 @@ In edit mode the mouse is never released: it stops turning the camera and
 starts moving the engine's own cursor instead, while the keyboard keeps
 flying.
 
-The cursor is drawn into the framebuffer, for the same reason the menu
-stopped being DOM. The reticle goes through bloom and scanlines like the
-rest of the scene, instead of floating over it without belonging to it.
+The cursor is drawn into a framebuffer, for the same reason the menu
+stopped being DOM: the interface one. The reticle goes through bloom and
+scanlines like the rest of the scene, instead of floating over it without
+belonging to it. Its position is kept in CSS pixels, and read in two grids:
+`scene*` to aim at objects, `ui*` for widgets.
 Its arms sit off-center and at different distances on the two axes. The
 gap is what the eye can find on a grid already made of lines, and the cell
 is 1:2.
@@ -505,6 +566,7 @@ src/
     loop.ts          fixed-step update + render
     input.ts         keyboard and mouse, captured and released
     freecam.ts       translates input into camera movement
+    orbit.ts         camera circling a point by itself (`orbit=1`)
   math/
     vec3.ts          operations with explicit destination, no hot-path allocation
     mat4.ts          view matrix in closed form
@@ -519,8 +581,9 @@ src/
                      per-fragment shading kernel itself lives in
                      render/gpu/passes/shading.ts (WGSL)
   render/
-    viewport.ts      column cap, cell size, devicePixelRatio
-    camera.ts        position, yaw, pitch, fov
+    viewport.ts      column cap, minimum cell width, devicePixelRatio
+    ui-viewport.ts   the interface grid: fixed cell size, independent of the scene
+    camera.ts        position, yaw, pitch, fov (of the smaller axis)
     framebuffer.ts   two planes in the format the GPU consumes directly
     rasterizer.ts    clipping, DDA, world position, disc, inverse ray
     shading.ts       the pen that ties light to character; the ground
@@ -533,6 +596,7 @@ src/
     gpu/
       context.ts     WebGPU device, resize, loss
       atlas.ts       uploads the glyph atlas as a texture
+      ui-layer.ts    the interface grid on the GPU: own atlas, own textures
       light-upload.ts lights and occluders to the GPU, as a storage buffer
       presenter.ts   orchestrates the passes; off-screen capture, for diagnostics
       passes/        shading (compute, WGSL: the light kernel and glyph
@@ -543,6 +607,7 @@ src/
     sky.ts           stars and horizon
     sun.ts           the sky's disc, and the directional light it is
     world.ts         the scene's objects: create, pick, save
+    scene-codec.ts   scene ⇄ URL text (JSON, deflate, base64url)
     entities/
       entity.ts      the object as data, and the fields the menu edits
       box.ts         the oriented box, drawn and tested by the same matrix
@@ -557,12 +622,16 @@ src/
     manipulator.ts   select, drag, rotate, and stretch by the faces
     hud.ts           fps, scene cost, and camera state
   config.ts          single source of tunable parameters
+  url-config.ts      reads settings, scene, camera and flags from the URL
+  embed-url.ts       writes the URL that reproduces what's on screen
+  persistence.ts     one switch for reading/writing localStorage
 ```
 
 ## Debugging
 
 In development, `window.engine` exposes `camera`, `settings`, `scene`,
 `world`, `lights`, `menu`, `rasterizer`, `presenter`, `capture(scale)`,
+`getUiFramebuffer()`, `getUiViewport()`,
 `dumpGlyphs()`, `countByColor()`, `showCharset()`, `setOverlay(fn)`, and
 `step()`.
 

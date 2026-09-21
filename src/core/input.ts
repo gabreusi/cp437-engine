@@ -88,6 +88,14 @@ export class Input {
   captureOnClick = true;
 
   /**
+   * O ponteiro nunca é capturado, nem por clique. Vem da URL (`lock=0`):
+   * um iframe de vitrine não pode sequestrar o mouse de quem só está rolando
+   * a página. Separado de `captureOnClick` porque o menu liga e desliga
+   * aquele a cada abertura, e este é uma escolha de quem embarcou.
+   */
+  lockEnabled = true;
+
+  /**
    * O mouse dirige o cursor da engine, e não a câmera.
    *
    * É o que permite editar sem soltar o ponteiro: com a captura ativa, o
@@ -126,7 +134,9 @@ export class Input {
     target.addEventListener("contextmenu", (event) => event.preventDefault());
 
     target.addEventListener("click", () => {
-      if (!this.locked && this.captureOnClick) void target.requestPointerLock();
+      if (!this.locked && this.captureOnClick && this.lockEnabled) {
+        void target.requestPointerLock();
+      }
     });
 
     target.addEventListener(

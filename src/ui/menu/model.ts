@@ -13,6 +13,12 @@
 
 export interface SliderItem {
   kind: "slider";
+  /**
+   * Nome do campo de `Settings` que o slider ajusta, quando é um. Deixa quem
+   * recebe um valor de fora (a URL) limitá-lo à mesma faixa que o menu aceita,
+   * sem uma segunda tabela de mínimos e máximos.
+   */
+  key?: string;
   label: string;
   min: number;
   max: number;

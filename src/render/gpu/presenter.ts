@@ -1,4 +1,5 @@
 import { settings } from "../../config";
+import type { Rgb } from "../../math/color";
 import { EMISSIVE_RANGE, type Framebuffer } from "../framebuffer";
 import { SHADOW_THRESHOLD } from "../../light/shade";
 import type { LightWorld } from "../../light/world";
@@ -11,6 +12,7 @@ import {
   buildEdgeShapePool,
   updateGlyphShapeTable,
 } from "../ramp";
+import type { UiViewport } from "../ui-viewport";
 import type { Viewport } from "../viewport";
 import { type GlyphAtlas, atlasCellWidthFor, buildGlyphAtlas } from "./atlas";
 import { GpuContext } from "./context";
@@ -20,6 +22,7 @@ import { CompositePass } from "./passes/composite";
 import { GridPass } from "./passes/grid";
 import { ShadingPass } from "./passes/shading";
 import { RenderTarget } from "./target";
+import { UiLayer } from "./ui-layer";
 
 export type { Atmosphere };
 
@@ -36,6 +39,7 @@ interface Resources {
   bloom: BloomPass;
   composite: CompositePass;
   scene: RenderTarget;
+  ui: UiLayer;
   atlas: GlyphAtlas | null;
   atlasCellWidth: number;
 }
@@ -48,8 +52,11 @@ interface Resources {
  */
 export interface Presenter {
   resize(viewport: Viewport): void;
+  resizeUi(viewport: UiViewport): void;
+  /** `ui` é `null` quando não há interface a desenhar neste quadro. */
   present(
     framebuffer: Framebuffer,
+    ui: Framebuffer | null,
     atmosphere: Atmosphere,
     lights: LightWorld,
     camera: Camera,
@@ -80,6 +87,8 @@ export class GpuPresenter implements Presenter {
   private readonly context: GpuContext;
   private resources: Resources | null = null;
   private viewport: Viewport | null = null;
+  private uiViewport: UiViewport | null = null;
+  private uiBackdrop: Rgb | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.context = new GpuContext(canvas);
@@ -103,11 +112,23 @@ export class GpuPresenter implements Presenter {
       bloom: new BloomPass(device, width, height, SCENE_FORMAT),
       composite: new CompositePass(device, format),
       scene: new RenderTarget(device, width, height, SCENE_FORMAT),
+      ui: new UiLayer(device, SCENE_FORMAT),
       atlas: null,
       atlasCellWidth: 0,
     };
 
     if (this.viewport !== null) this.applyResize(this.viewport);
+    if (this.uiBackdrop !== null) this.resources.ui.setBackdrop(this.uiBackdrop);
+    if (this.uiViewport !== null) this.resources.ui.resize(this.uiViewport);
+  }
+
+  /**
+   * Cor do fundo dos painéis da interface. Guardada aqui, e não só na camada,
+   * porque a camada é recriada junto com o dispositivo.
+   */
+  setUiBackdrop(color: Rgb): void {
+    this.uiBackdrop = color;
+    this.resources?.ui.setBackdrop(color);
   }
 
   /** Ver o comentário em `Presenter.isAtlasReady` — aqui só depois que `whenReady()` resolver. */
@@ -118,6 +139,11 @@ export class GpuPresenter implements Presenter {
   resize(viewport: Viewport): void {
     this.viewport = viewport;
     this.applyResize(viewport);
+  }
+
+  resizeUi(viewport: UiViewport): void {
+    this.uiViewport = viewport;
+    if (this.context.isReady) this.resources?.ui.resize(viewport);
   }
 
   private applyResize(viewport: Viewport): void {
@@ -174,6 +200,7 @@ export class GpuPresenter implements Presenter {
     const cellWidth = atlasCellWidthFor(viewport.cellWidth * viewport.dpr);
     this.rebuildAtlas(cellWidth);
     resources.atlasCellWidth = cellWidth;
+    resources.ui.rebuildAtlas();
   }
 
   private runShading(
@@ -213,6 +240,7 @@ export class GpuPresenter implements Presenter {
 
   present(
     framebuffer: Framebuffer,
+    ui: Framebuffer | null,
     atmosphere: Atmosphere,
     lights: LightWorld,
     camera: Camera,
@@ -237,6 +265,11 @@ export class GpuPresenter implements Presenter {
     });
     resources.background.draw(scenePass, atmosphere, viewport.pixelWidth, viewport.pixelHeight, settings.groundHaze);
     resources.grid.draw(scenePass, shadingCells, shadingColors);
+    // A interface vem depois da cena e antes do bloom: brilha junto com ela.
+    if (ui !== null) {
+      resources.ui.upload(ui);
+      resources.ui.draw(scenePass, viewport.pixelWidth, viewport.pixelHeight);
+    }
     scenePass.end();
 
     resources.bloom.render(encoder, resources.scene.view, settings.bloomRadius);
@@ -404,6 +437,7 @@ export class GpuPresenter implements Presenter {
     resources.bloom.dispose();
     resources.composite.dispose();
     resources.scene.dispose();
+    resources.ui.dispose();
     this.resources = null;
   }
 }

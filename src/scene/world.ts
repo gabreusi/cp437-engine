@@ -14,6 +14,7 @@ import {
   type EntityState,
   reserveIds,
 } from "./entities/entity";
+import {persistenceEnabled} from "../persistence";
 import {monolithKind} from "./entities/monolith";
 import {orbKind} from "./entities/orb";
 import {panelKind} from "./entities/panel";
@@ -416,20 +417,37 @@ export class World implements Renderable {
     this.selectedId = null;
   }
 
-  save(): void {
-    const plain = this.entities.map(
+  /**
+   * A cena como dado puro: sem `current` (posição animada, derivada) nem o
+   * material do espelho (recriado ao carregar). É o que vai para o
+   * `localStorage` e para a URL de embed.
+   */
+  serialize(): Omit<EntityState, "current" | "mirrorMaterial">[] {
+    return this.entities.map(
       ({ current: _current, mirrorMaterial: _mirrorMaterial, ...rest }) =>
         rest,
     );
+  }
+
+  save(): void {
+    if (!persistenceEnabled()) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(plain));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.serialize()));
     } catch {
       //perder a cena salva não pode derrubar
     }
   }
 
+  /** Nenhum objeto: terreno vazio, para quem monta a cena do zero. */
+  loadEmpty(): void {
+    this.entities.length = 0;
+    this.selectedId = null;
+  }
+
   /** Devolve `false` quando não há nada salvo, e a demo entra no lugar. */
   load(): boolean {
+    if (!persistenceEnabled()) return false;
+
     let raw: string | null = null;
     try {
       raw = localStorage.getItem(STORAGE_KEY);
@@ -439,31 +457,44 @@ export class World implements Renderable {
     if (raw === null) return false;
 
     try {
-      const parsed = JSON.parse(raw) as EntityState[];
-      if (!Array.isArray(parsed) || parsed.length === 0) return false;
-
-      this.entities.length = 0;
-      for (const saved of parsed) {
-        const definition = ENTITY_KINDS[saved.kind];
-        if (definition === undefined) continue;
-
-        // O que está salvo manda; o que não está vem do padrão do tipo.
-        // É o que deixa um campo novo — textura foi o primeiro — nascer
-        // com valor sensato numa cena montada antes de ele existir, em
-        // vez de chegar `undefined` no meio do render.
-        const entity = {
-          ...createEntity(saved.kind, definition.defaults()),
-          ...saved,
-          current: vec3(),
-        };
-        copy(entity.current, entity.position);
-        this.entities.push(entity);
-      }
-      reserveIds(this.entities);
-      this.selectedId = null;
-      return this.entities.length > 0;
+      return this.loadFrom(JSON.parse(raw));
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Substitui a cena por uma lista de objetos serializados — do
+   * `localStorage` ou da URL. Devolve `false` (e não mexe em nada) se a lista
+   * não trouxer nenhum objeto que a engine conheça.
+   */
+  loadFrom(parsed: unknown): boolean {
+    if (!Array.isArray(parsed) || parsed.length === 0) return false;
+
+    const loaded: EntityState[] = [];
+    for (const saved of parsed as EntityState[]) {
+      if (saved === null || typeof saved !== "object") continue;
+      const definition = ENTITY_KINDS[saved.kind];
+      if (definition === undefined) continue;
+
+      // O que está salvo manda; o que não está vem do padrão do tipo.
+      // É o que deixa um campo novo — textura foi o primeiro — nascer
+      // com valor sensato numa cena montada antes de ele existir, em
+      // vez de chegar `undefined` no meio do render.
+      const entity = {
+        ...createEntity(saved.kind, definition.defaults()),
+        ...saved,
+        current: vec3(),
+      };
+      copy(entity.current, entity.position);
+      loaded.push(entity);
+    }
+    if (loaded.length === 0) return false;
+
+    this.entities.length = 0;
+    this.entities.push(...loaded);
+    reserveIds(this.entities);
+    this.selectedId = null;
+    return true;
   }
 }

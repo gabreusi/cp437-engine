@@ -6,6 +6,7 @@
  * quando não existia câmera. Horizonte agora é para onde a câmera olha, e o sol
  * tem elevação e azimute como qualquer corpo celeste.
  */
+import {persistenceEnabled} from "./persistence";
 import {type SurfaceTexture, TEXTURE} from "./render/ramp";
 
 /** De onde o atlas tira o desenho dos glifos que não são pintados à mão. */
@@ -28,6 +29,18 @@ export interface Settings {
    * não é o multiplicador "de graça" que era antes de virar teto de grade.
    */
   renderScale: number;
+  /**
+   * Largura mínima da célula da cena em pixels CSS. Em janela pequena é ele,
+   * e não os tetos de `renderScale`, que decide quantas colunas cabem — ver
+   * `render/viewport.ts`.
+   */
+  minCellWidth: number;
+  /**
+   * Tamanho da célula da interface (menu, painel, retículo) em relação ao
+   * padrão. Separado de `renderScale`: aquele mexe na densidade da cena, este
+   * só no tamanho do texto — ver `render/ui-viewport.ts`.
+   */
+  uiScale: number;
   /** Fonte do atlas para os glifos que vêm de texto, não de `PAINTERS`. */
   fontFamily: FontChoice;
 
@@ -142,6 +155,8 @@ export const settings: Settings = {
   moveSpeed: 12,
   lookSensitivity: 0.0022,
   renderScale: 1,
+  minCellWidth: 6,
+  uiScale: 1,
   fontFamily: FONT.OLDSCHOOL,
 
   gridSize: 16,
@@ -196,7 +211,9 @@ const SETTINGS_STORAGE_KEY = "cp437-engine/settings";
  * uma segunda cópia que ninguém mais toca. Mesmo problema que `World.load()`
  * resolve com `createEntity(kind, defaults())` (`scene/world.ts`).
  */
-const DEFAULT_SETTINGS: Settings = { ...settings };
+export const DEFAULT_SETTINGS: Readonly<Settings> = Object.freeze({
+  ...settings,
+});
 
 /**
  * Grava `settings` inteiro em `localStorage`.
@@ -207,6 +224,7 @@ const DEFAULT_SETTINGS: Settings = { ...settings };
  * travar a engine, só deixá-la sem memória entre sessões.
  */
 export const saveSettings = (): void => {
+  if (!persistenceEnabled()) return;
   try {
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   } catch {
@@ -225,6 +243,8 @@ export const saveSettings = (): void => {
  * `settings`.
  */
 export const loadSettings = (): void => {
+  if (!persistenceEnabled()) return;
+
   let raw: string | null;
   try {
     raw = localStorage.getItem(SETTINGS_STORAGE_KEY);

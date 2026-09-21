@@ -1,4 +1,7 @@
 import {FONT, resetSettings, saveSettings, type Settings, settings} from "../../config";
+import {copyEmbedUrl, embedUrlLabel} from "../../embed-url";
+import {clamp} from "../../math/clamp";
+import type {Camera} from "../../render/camera";
 import type {EntityField, EntityState} from "../../scene/entities/entity";
 import {TEXTURES} from "../../render/ramp";
 import {ENTITY_KINDS, ENTITY_ORDER, type World} from "../../scene/world";
@@ -36,6 +39,7 @@ interface SliderSpec {
 
 const slider = (spec: SliderSpec): MenuItem => ({
   kind: "slider",
+  key: spec.key,
   label: spec.label,
   min: spec.min,
   max: spec.max,
@@ -58,6 +62,38 @@ const toggle = (key: BooleanKey, label: string): MenuItem => ({
     saveSettings();
   },
 });
+
+/**
+ * Aplica ajustes vindos de fora (a URL) limitando cada slider à faixa do menu.
+ *
+ * A faixa vem dos próprios sliders — `SliderItem.key` — e não de uma tabela à
+ * parte: um `renderScale=0` na URL dividiria a grade por zero, e a única
+ * definição de "valor razoável" que a engine tem é o que o menu deixa ajustar.
+ * Só o que vem de fora é limitado; os defaults e o que foi salvo seguem como
+ * estão, para o desktop não mudar de um dia para o outro.
+ */
+export const applySettingOverrides = (
+  groups: readonly MenuGroup[],
+  overrides: Partial<Settings>,
+): void => {
+  const ranges = new Map<string, { min: number; max: number }>();
+  for (const group of groups) {
+    for (const item of group.items()) {
+      if (item.kind === "slider" && item.key !== undefined) {
+        ranges.set(item.key, { min: item.min, max: item.max });
+      }
+    }
+  }
+
+  const target = settings as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(overrides)) {
+    const range = ranges.get(key);
+    target[key] =
+      typeof value === "number" && range !== undefined
+        ? clamp(value, range.min, range.max)
+        : value;
+  }
+};
 
 const TEXTURE_LABELS: Record<string, string> = {
   smooth: "Smooth",
@@ -89,13 +125,13 @@ const withHeadingSpacing = (items: readonly MenuItem[]): MenuItem[] => {
   return result;
 };
 
-export const buildGroups = (world: World): MenuGroup[] =>
-  rawGroups(world).map((group) => ({
+export const buildGroups = (world: World, camera: Camera): MenuGroup[] =>
+  rawGroups(world, camera).map((group) => ({
     label: group.label,
     items: () => withHeadingSpacing(group.items()),
   }));
 
-const rawGroups = (world: World): MenuGroup[] => [
+const rawGroups = (world: World, camera: Camera): MenuGroup[] => [
   {
     label: "General",
     items: () => [
@@ -116,6 +152,14 @@ const rawGroups = (world: World): MenuGroup[] => [
         step: 0.0001,
         digits: 4,
       }),
+      { kind: "heading", label: "Embed" },
+      {
+        kind: "action",
+        label: embedUrlLabel(),
+        run: () => {
+          void copyEmbedUrl(world, camera);
+        },
+      },
       { kind: 'spacer' },
       { kind: 'spacer' },
       { kind: 'spacer' },
@@ -301,6 +345,24 @@ const rawGroups = (world: World): MenuGroup[] => [
       slider({
         key: "renderScale",
         label: "Render Scale",
+        min: 0.75,
+        max: 2,
+        step: 0.25,
+        digits: 2,
+        suffix: "x",
+      }),
+      slider({
+        key: "minCellWidth",
+        label: "Min Cell Width",
+        min: 2,
+        max: 16,
+        step: 0.5,
+        digits: 1,
+        suffix: "px",
+      }),
+      slider({
+        key: "uiScale",
+        label: "UI Scale",
         min: 0.75,
         max: 2,
         step: 0.25,

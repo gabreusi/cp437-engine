@@ -1,14 +1,18 @@
 import "./styles/index.css";
 
 import { degreesToRadians, loadSettings, settings } from "./config";
+import { setPersistence } from "./persistence";
+import { parseUrlConfig, type SceneSource } from "./url-config";
+import { decodeScene } from "./scene/scene-codec";
 import { requireElement } from "./dom";
 import { FreeCam } from "./core/freecam";
+import { OrbitCam } from "./core/orbit";
 import { GameLoop } from "./core/loop";
 import { createUiEvents, Input, type UiEvents } from "./core/input";
 import { SHADOW_THRESHOLD, type ShadeOptions } from "./light/shade";
 import { LightWorld } from "./light/world";
 import { setRgb } from "./math/color";
-import { Camera } from "./render/camera";
+import { Camera, verticalFovFor } from "./render/camera";
 import { drawDebugPattern } from "./render/debug-pattern";
 import { countByColor, dumpGlyphs } from "./render/debug-dump";
 import { Framebuffer } from "./render/framebuffer";
@@ -20,6 +24,12 @@ import {
   type Viewport,
   viewportEquals,
 } from "./render/viewport";
+import {
+  computeUiViewport,
+  createUiViewport,
+  type UiViewport,
+  uiViewportEquals,
+} from "./render/ui-viewport";
 import { Scene } from "./scene/scene";
 import { Sky } from "./scene/sky";
 import { Sun, sunDirection } from "./scene/sun";
@@ -28,9 +38,15 @@ import { Cursor } from "./ui/cursor";
 import { Editor } from "./ui/editor";
 import { type FrameStats, Hud } from "./ui/hud";
 import { Manipulator } from "./ui/manipulator";
+import { MENU_COLORS } from "./ui/menu/draw";
 import { Menu } from "./ui/menu/menu";
-import { buildGroups } from "./ui/menu/schema";
+import { applySettingOverrides, buildGroups } from "./ui/menu/schema";
 import { Ground } from "./scene/ground";
+
+// A URL manda: quem embarca a engine acerta ajustes, cena e câmera por ela.
+// Vem antes de tudo porque decide se o `localStorage` é lido (ver `persistence.ts`).
+const urlConfig = parseUrlConfig(location.search);
+setPersistence(urlConfig.persist);
 
 // Antes de qualquer leitura de `settings` — `syncViewport` já lê
 // `renderScale` na primeira chamada.
@@ -38,6 +54,8 @@ loadSettings();
 
 const canvas = requireElement<HTMLCanvasElement>("canvas");
 const presenter = new GpuPresenter(canvas);
+// O vão de toda célula opaca da interface é o fundo do painel, não preto.
+presenter.setUiBackdrop(MENU_COLORS.BACKDROP);
 
 // O primeiro atlas quase sempre desenha antes da BIOS terminar de carregar
 // (ver `ensureFontLoaded`); assim que ela chega, o atlas é refeito com a
@@ -48,13 +66,65 @@ void ensureFontLoaded()
   .then(() => presenter.refreshAtlas());
 
 const camera = new Camera();
+if (urlConfig.camera !== null) {
+  const pose = urlConfig.camera;
+  camera.position.x = pose.x;
+  camera.position.y = pose.y;
+  camera.position.z = pose.z;
+  camera.yaw = degreesToRadians(pose.yawDegrees);
+  camera.pitch = degreesToRadians(pose.pitchDegrees);
+  camera.update();
+}
 const rasterizer = new Rasterizer();
 const input = new Input(canvas);
+input.lockEnabled = urlConfig.lock;
 const freecam = new FreeCam(camera, input);
-const hud = new Hud(requireElement("hud"));
+
+/** Distância do alvo padrão da órbita, à frente da câmera de partida. */
+const ORBIT_LEAD = 8;
+
+// Sem `orbitTarget`, gira em volta do ponto à frente da câmera de partida, na
+// altura dela — o que quer que `cam=` tenha enquadrado.
+const orbit =
+  urlConfig.orbit === null
+    ? null
+    : new OrbitCam(
+        camera,
+        degreesToRadians(urlConfig.orbit.speedDegrees),
+        urlConfig.orbit.target ?? {
+          x: camera.position.x - Math.sin(camera.yaw) * ORBIT_LEAD,
+          y: camera.position.y,
+          z: camera.position.z - Math.cos(camera.yaw) * ORBIT_LEAD,
+        },
+      );
+orbit?.start();
+
+const hudElement = requireElement("hud");
+hudElement.hidden = !urlConfig.hud;
+const hud = new Hud(hudElement);
 
 const world = new World();
-if (!world.load()) world.loadDemo();
+
+/** Cena da URL, se houver e for válida; senão a salva, senão a demo. */
+const loadScene = async (source: SceneSource | null): Promise<void> => {
+  if (source?.kind === "empty") {
+    world.loadEmpty();
+    return;
+  }
+  if (source?.kind === "encoded") {
+    const decoded = await decodeScene(source.data);
+    if (decoded !== null && world.loadFrom(decoded)) return;
+    console.warn("[url-config] scene inválida na URL; usando a demo");
+  }
+  if (source?.kind === "demo") {
+    world.loadDemo();
+    return;
+  }
+  if (!world.load()) world.loadDemo();
+};
+// A engine só começa a desenhar depois que a cena chegou: descomprimir é
+// assíncrono, e um primeiro quadro com a demo por engano piscaria na tela.
+await loadScene(urlConfig.scene);
 
 const scene = new Scene();
 scene.add(new Sky());
@@ -106,7 +176,11 @@ const manipulator = new Manipulator();
  * de um para o outro faria o ponteiro saltar.
  */
 const cursor = new Cursor();
-const menu = new Menu(buildGroups(world), world, input, manipulator, cursor);
+const menuGroups = buildGroups(world, camera);
+// Depois do menu montado: é dele que vêm as faixas que limitam o que a URL pede.
+applySettingOverrides(menuGroups, urlConfig.settings);
+const menu = new Menu(menuGroups, world, input, manipulator, cursor);
+menu.enabled = urlConfig.menu;
 const editor = new Editor(world, input, manipulator, cursor);
 const uiEvents: UiEvents = createUiEvents();
 
@@ -142,6 +216,13 @@ let viewport: Viewport | null = null;
 let framebuffer: Framebuffer | null = null;
 
 /**
+ * A grade da interface e o framebuffer dela. Menu, painel do editor e retículo
+ * escrevem aqui, e não na cena — ver `render/ui-viewport.ts`.
+ */
+let uiViewport: UiViewport = createUiViewport();
+let uiFramebuffer: Framebuffer | null = null;
+
+/**
  * Camada de diagnóstico desenhada por cima da cena, quando ligada.
  *
  * Um toggle e não uma chamada avulsa: desenhar uma vez e devolver o controle ao
@@ -156,11 +237,19 @@ const syncViewport = (): Viewport => {
     window.innerHeight,
     window.devicePixelRatio,
     settings.renderScale,
+    settings.minCellWidth,
   );
   if (viewport === null || !viewportEquals(viewport, next)) {
     viewport = next;
     framebuffer = new Framebuffer(next.colCount, next.rowCount);
     presenter.resize(next);
+  }
+
+  const nextUi = computeUiViewport(viewport, settings.uiScale);
+  if (uiFramebuffer === null || !uiViewportEquals(uiViewport, nextUi)) {
+    uiViewport = nextUi;
+    uiFramebuffer = new Framebuffer(nextUi.colCount, nextUi.rowCount);
+    presenter.resizeUi(nextUi);
   }
   return viewport;
 };
@@ -178,8 +267,8 @@ const syncFont = (): void => {
 };
 
 const update = (deltaSeconds: number): void => {
-  camera.fov = degreesToRadians(settings.fovDegrees);
-  freecam.update(deltaSeconds);
+  if (orbit === null) freecam.update(deltaSeconds);
+  else orbit.update(deltaSeconds);
 };
 
 /** Converte sol e horizonte para UV, com y para cima, como o shader espera. */
@@ -231,7 +320,14 @@ const updateAtmosphere = (currentViewport: Viewport): void => {
 const render = (time: number): void => {
   const currentViewport = syncViewport();
   syncFont();
-  if (framebuffer === null) return;
+  if (framebuffer === null || uiFramebuffer === null) return;
+
+  // Depende da proporção da grade, então só aqui — depois de `syncViewport`
+  // e antes de qualquer coisa que projete ou leia `camera.fov`.
+  camera.fov = verticalFovFor(
+    degreesToRadians(settings.fovDegrees),
+    currentViewport.aspect,
+  );
 
   // Criação de dispositivo é assíncrona no backend WebGPU
   // (`requestAdapter`/`requestDevice`): sem isto, os primeiros quadros
@@ -240,6 +336,7 @@ const render = (time: number): void => {
   if (!presenter.isAtlasReady()) return;
 
   framebuffer.clear();
+  uiFramebuffer.clear();
   rasterizer.begin(camera, currentViewport, framebuffer);
 
   lights.begin();
@@ -270,11 +367,19 @@ const render = (time: number): void => {
   stats.occluders = lights.occluderCount;
 
   input.consumeUi(uiEvents);
-  cursor.update(input, uiEvents, currentViewport);
-  menu.update(uiEvents, currentViewport, camera, rasterizer, lights);
+  cursor.update(input, uiEvents, currentViewport, uiViewport);
+  menu.update(
+    uiEvents,
+    currentViewport,
+    uiViewport,
+    camera,
+    rasterizer,
+    lights,
+  );
   editor.update(
     uiEvents,
     currentViewport,
+    uiViewport,
     camera,
     rasterizer,
     lights,
@@ -286,17 +391,25 @@ const render = (time: number): void => {
   // resposta do outro conforme a ordem em que rodam.
   world.editing = menu.editing || editor.active;
 
-  editor.draw(framebuffer, currentViewport, rasterizer);
-  menu.draw(framebuffer, rasterizer);
+  editor.draw(framebuffer, uiFramebuffer, uiViewport, rasterizer);
+  menu.draw(framebuffer, uiFramebuffer, rasterizer);
   // O retículo é o último a ser escrito: ele aponta para o menu e para o
   // painel, então não pode ser coberto por nenhum dos dois.
-  if (menu.open || editor.active) cursor.draw(framebuffer);
+  const hasUi = menu.open || editor.active;
+  if (hasUi) cursor.draw(uiFramebuffer);
 
   debugOverlay?.(framebuffer);
 
   updateAtmosphere(currentViewport);
-  presenter.present(framebuffer, atmosphere, lights, camera);
-  hud.update(camera, time, input.isLocked, stats);
+  // Sem interface aberta a grade de UI nem sobe para a GPU.
+  presenter.present(
+    framebuffer,
+    hasUi ? uiFramebuffer : null,
+    atmosphere,
+    lights,
+    camera,
+  );
+  if (urlConfig.hud) hud.update(camera, time, input.isLocked, stats);
 };
 
 new GameLoop(update, render).start();
@@ -320,6 +433,8 @@ if (import.meta.env.DEV) {
       freecam,
       rasterizer,
       getFramebuffer: () => framebuffer,
+      getUiFramebuffer: () => uiFramebuffer,
+      getUiViewport: () => uiViewport,
       dumpGlyphs: async () => {
         const planes = await presenter.readShadedPlanes();
         return planes === null ? "" : dumpGlyphs(planes);

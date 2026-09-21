@@ -6,6 +6,30 @@ const HALF_PI = Math.PI / 2;
 /** Um pelo de folga: em pitch exatamente vertical o yaw perde a referência. */
 const PITCH_LIMIT = HALF_PI - 0.001;
 
+/**
+ * Teto do campo de visão horizontal.
+ *
+ * Numa janela muito larga o FOV vertical fixo estica as bordas até virar olho
+ * de peixe; acima disto o vertical é que cede.
+ */
+const MAX_HORIZONTAL_FOV = (120 * Math.PI) / 180;
+
+/**
+ * FOV vertical, em radianos, para a proporção real da tela.
+ *
+ * O ajuste `fovDegrees` vale para o eixo **menor**: em paisagem é o vertical
+ * de sempre (o desktop não muda), em retrato é o horizontal — senão uma janela
+ * estreita enxergaria uma fatia fina do mundo. Uma conta só, aqui, porque
+ * `Rasterizer` e a névoa do fundo leem o mesmo `camera.fov` e não podem
+ * discordar. `aspect` é o de `Viewport` (já com `CELL_ASPECT` compensado).
+ */
+export const verticalFovFor = (fov: number, aspect: number): number => {
+  const tanHalf = Math.tan(fov / 2);
+  const tanVertical = aspect >= 1 ? tanHalf : tanHalf / aspect;
+  const tanCap = Math.tan(MAX_HORIZONTAL_FOV / 2) / aspect;
+  return 2 * Math.atan(Math.min(tanVertical, tanCap));
+};
+
 export class Camera {
   readonly position: Vec3 = vec3(0, 1.6, 8);
 
